@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-def _mlp(input_dim: int, hidden_dims: tuple[int, ...], output_dim: int) -> nn.Sequential:
-    layers: list[nn.Module] = []
+def _mlp(input_dim: int, hidden_dims: Tuple[int, ...], output_dim: int) -> nn.Sequential:
+    layers: List[nn.Module] = []
     prev = input_dim
     for width in hidden_dims:
         layers.append(nn.Linear(prev, width))
@@ -182,7 +184,7 @@ class SCIGAN:
         self,
         factual_t: torch.Tensor,
         factual_d: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         b = factual_t.shape[0]
         m = self.config.num_dosage_samples
         dosage_samples = torch.rand(b, self.config.num_treatments, m, device=self.device)
@@ -192,7 +194,7 @@ class SCIGAN:
         mask[torch.arange(b), factual_t, positions] = 1.0
         return dosage_samples, mask
 
-    def fit(self, x: np.ndarray, t: np.ndarray, dosage: np.ndarray, y: np.ndarray) -> "SCIGAN":
+    def fit(self, x: NDArray, t: NDArray, dosage: NDArray, y: NDArray) -> "SCIGAN":
         x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
         t_t = torch.as_tensor(np.asarray(t, dtype=np.int64), device=self.device)
         d_t = torch.as_tensor(np.asarray(dosage, dtype=np.float32).reshape(-1, 1), device=self.device)
@@ -233,7 +235,9 @@ class SCIGAN:
             dosage_logits = self.dosage_discriminator(xb, dosage_samples, completed)
             treatment_logits = self.treatment_discriminator(xb, dosage_samples, completed)
             combined_prob = torch.sigmoid(dosage_logits) * torch.sigmoid(treatment_logits).unsqueeze(-1)
-            g_adv = -torch.mean(mask * torch.log(combined_prob + 1e-7) + (1.0 - mask) * torch.log(1.0 - combined_prob + 1e-7))
+            g_adv = -torch.mean(
+                mask * torch.log(combined_prob + 1e-7) + (1.0 - mask) * torch.log(1.0 - combined_prob + 1e-7)
+            )
             factual_pred = torch.sum(mask * g_out, dim=(1, 2), keepdim=True)
             g_rec = F.mse_loss(factual_pred, yb.unsqueeze(-1))
             g_loss = g_adv + self.config.alpha * torch.sqrt(g_rec + 1e-8)
@@ -259,7 +263,7 @@ class SCIGAN:
             self.i_opt.step()
         return self
 
-    def predict_response(self, x: np.ndarray, treatment: int, dosage: np.ndarray | float) -> np.ndarray:
+    def predict_response(self, x: NDArray, treatment: int, dosage: NDArray | float) -> NDArray:
         x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
         dosage_arr = np.asarray(dosage, dtype=np.float32).reshape(-1, 1)
         if dosage_arr.shape[0] == 1 and x_t.shape[0] > 1:

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-def _mlp(input_dim: int, hidden_dims: tuple[int, ...], output_dim: int) -> nn.Sequential:
-    layers: list[nn.Module] = []
+def _mlp(input_dim: int, hidden_dims: Tuple[int, ...], output_dim: int) -> nn.Sequential:
+    layers: List[nn.Module] = []
     prev = input_dim
     for width in hidden_dims:
         layers.append(nn.Linear(prev, width))
@@ -84,8 +86,8 @@ class DRLearnerConfig:
 
 @dataclass(slots=True)
 class DRLearnerDiagnostics:
-    nuisance_losses: list[list[float]] = field(default_factory=list)
-    final_losses: list[float] = field(default_factory=list)
+    nuisance_losses: List[List[float]] = field(default_factory=list)
+    final_losses: List[float] = field(default_factory=list)
     pseudo_outcome_mean: float = 0.0
     pseudo_outcome_std: float = 1.0
     mean_propensity: float = 0.0
@@ -111,7 +113,7 @@ class DRLearner:
         torch.manual_seed(config.seed)
         torch.set_num_threads(1)
         self.device = torch.device(config.device)
-        self.nuisance_models: list[_DRNuisanceNet] = []
+        self.nuisance_models: List[_DRNuisanceNet] = []
         self.final_model = _mlp(config.x_dim, (config.hidden_dim, config.hidden_dim), 1).to(self.device)
         self.final_optimizer = torch.optim.AdamW(
             self.final_model.parameters(),
@@ -122,7 +124,7 @@ class DRLearner:
         self.pseudo_std = 1.0
         self.diagnostics = DRLearnerDiagnostics()
 
-    def _new_nuisance_model(self, seed: int) -> tuple[_DRNuisanceNet, torch.optim.Optimizer]:
+    def _new_nuisance_model(self, seed: int) -> Tuple[_DRNuisanceNet, torch.optim.Optimizer]:
         torch.manual_seed(seed)
         model = _DRNuisanceNet(
             x_dim=self.config.x_dim,
@@ -150,9 +152,9 @@ class DRLearner:
         y: torch.Tensor,
         train_indices: torch.Tensor,
         fold: int,
-    ) -> tuple[_DRNuisanceNet, list[float]]:
+    ) -> Tuple[_DRNuisanceNet, List[float]]:
         model, optimizer = self._new_nuisance_model(self.config.seed + 10_000 + fold)
-        losses: list[float] = []
+        losses: List[float] = []
         for step in range(self.config.nuisance_steps):
             idx = self._sample_batch(train_indices)
             xb = x[idx]
@@ -162,10 +164,7 @@ class DRLearner:
             factual_mu = mu_hat.gather(1, tb.reshape(-1, 1))
             outcome_loss = F.mse_loss(factual_mu, yb)
             propensity_loss = F.cross_entropy(prop_logits, tb)
-            loss = (
-                self.config.outcome_loss_weight * outcome_loss
-                + self.config.propensity_loss_weight * propensity_loss
-            )
+            loss = self.config.outcome_loss_weight * outcome_loss + self.config.propensity_loss_weight * propensity_loss
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -173,7 +172,7 @@ class DRLearner:
                 losses.append(float(loss.detach().cpu().item()))
         return model, losses
 
-    def _predict_nuisance_tensor(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _predict_nuisance_tensor(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if not self.nuisance_models:
             raise RuntimeError("DRLearner must be fit before prediction")
         mu_sum = torch.zeros(x.shape[0], self.config.num_treatments, dtype=x.dtype, device=self.device)
@@ -188,7 +187,7 @@ class DRLearner:
         scale = float(len(self.nuisance_models))
         return mu_sum / scale, prop_sum / scale
 
-    def fit(self, x: np.ndarray, treatment: np.ndarray, y: np.ndarray) -> "DRLearner":
+    def fit(self, x: NDArray[np.float32], treatment: NDArray[np.int64], y: NDArray[np.float32]) -> "DRLearner":
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -261,11 +260,11 @@ class DRLearner:
                 self.diagnostics.final_losses.append(float(loss.detach().cpu().item()))
         return self
 
-    def predict_cate(self, x: np.ndarray) -> np.ndarray:
+    def predict_cate(self, x: NDArray[np.float32]) -> NDArray[np.float32]:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
-        outputs: list[np.ndarray] = []
+        outputs: List[NDArray[np.float32]] = []
         self.final_model.eval()
         with torch.no_grad():
             start = 0
@@ -281,12 +280,12 @@ class DRLearner:
         upper = self.config.outcome_max - self.config.outcome_min
         return np.clip(tau, lower, upper).astype(np.float32)
 
-    def _predict_average_nuisance(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def _predict_average_nuisance(self, x: NDArray[np.float32]) -> Tuple[NDArray[np.float32], NDArray[np.float32]]:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
-        outputs_mu: list[np.ndarray] = []
-        outputs_prop: list[np.ndarray] = []
+        outputs_mu: List[NDArray[np.float32]] = []
+        outputs_prop: List[NDArray[np.float32]] = []
         start = 0
         while start < x_arr.shape[0]:
             stop = min(start + 65_536, x_arr.shape[0])
@@ -297,7 +296,7 @@ class DRLearner:
             start = stop
         return np.concatenate(outputs_mu, axis=0), np.concatenate(outputs_prop, axis=0)
 
-    def predict_potential_outcomes(self, x: np.ndarray) -> np.ndarray:
+    def predict_potential_outcomes(self, x: NDArray[np.float32]) -> NDArray[np.float32]:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -312,11 +311,11 @@ class DRLearner:
 
     def sample_potential(
         self,
-        x: np.ndarray,
-        treatment: np.ndarray | int,
+        x: NDArray[np.float32],
+        treatment: NDArray[np.int64] | int,
         n_per_x: int = 1,
-        seed: int | None = None,
-    ) -> np.ndarray:
+        seed: Optional[int] = None,
+    ) -> NDArray[np.float32]:
         del seed
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:

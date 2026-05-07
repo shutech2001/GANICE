@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+from typing import List, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-def _mlp(input_dim: int, hidden_dims: tuple[int, ...], output_dim: int) -> nn.Sequential:
-    layers: list[nn.Module] = []
+def _mlp(input_dim: int, hidden_dims: Tuple[int, ...], output_dim: int) -> nn.Sequential:
+    layers: List[nn.Module] = []
     prev = input_dim
     for width in hidden_dims:
         layers.append(nn.Linear(prev, width))
@@ -35,9 +37,7 @@ class _SinusoidalTimeEmbedding(nn.Module):
     def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
         half_dim = self.dim // 2
         scale = math.log(10_000.0) / max(half_dim - 1, 1)
-        freqs = torch.exp(
-            torch.arange(half_dim, device=timesteps.device, dtype=torch.float32) * -scale
-        )
+        freqs = torch.exp(torch.arange(half_dim, device=timesteps.device, dtype=torch.float32) * -scale)
         args = timesteps.float().reshape(-1, 1) * freqs.reshape(1, -1)
         embedding = torch.cat([torch.sin(args), torch.cos(args)], dim=1)
         if embedding.shape[1] < self.dim:
@@ -75,14 +75,13 @@ class _DiffPODenoiser(nn.Module):
         self.context = _mlp(x_dim + num_treatments + hidden_dim, (hidden_dim,), hidden_dim)
         self.y_embed = nn.Linear(1, hidden_dim)
         self.blocks = nn.ModuleList(
-            [
-                _ConditionalResidualBlock(hidden_dim=hidden_dim, context_dim=hidden_dim)
-                for _ in range(residual_blocks)
-            ]
+            [_ConditionalResidualBlock(hidden_dim=hidden_dim, context_dim=hidden_dim) for _ in range(residual_blocks)]
         )
         self.output = _mlp(hidden_dim, (hidden_dim,), 1)
 
-    def forward(self, y_t: torch.Tensor, timestep: torch.Tensor, x: torch.Tensor, treatment: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, y_t: torch.Tensor, timestep: torch.Tensor, x: torch.Tensor, treatment: torch.Tensor
+    ) -> torch.Tensor:
         treatment_onehot = F.one_hot(treatment, num_classes=self.num_treatments).to(dtype=x.dtype)
         time_features = self.time_embedding(timestep)
         context = self.context(torch.cat([x, treatment_onehot, time_features], dim=1))
@@ -109,8 +108,8 @@ class DiffPOConfig:
     beta_start: float = 1e-4
     beta_end: float = 2e-2
     min_propensity: float = 0.05
-    outcome_min: float | None = None
-    outcome_max: float | None = None
+    outcome_min: Optional[float] = None
+    outcome_max: Optional[float] = None
     standardize_outcome: bool = True
     max_sample_batch: int = 16_384
     seed: int = 59
@@ -119,8 +118,8 @@ class DiffPOConfig:
 
 @dataclass(slots=True)
 class DiffPODiagnostics:
-    propensity_losses: list[float] = field(default_factory=list)
-    diffusion_losses: list[float] = field(default_factory=list)
+    propensity_losses: List[float] = field(default_factory=list)
+    diffusion_losses: List[float] = field(default_factory=list)
     mean_ipw: float = 0.0
     max_ipw: float = 0.0
 
@@ -199,7 +198,7 @@ class DiffPO:
         self.propensity.train()
         return weights
 
-    def fit(self, x: np.ndarray, treatment: np.ndarray, y: np.ndarray) -> "DiffPO":
+    def fit(self, x: NDArray[np.float32], treatment: NDArray[np.int64], y: NDArray[np.float32]) -> "DiffPO":
         x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
         treatment_t = torch.as_tensor(np.asarray(treatment, dtype=np.int64).reshape(-1), device=self.device)
         y_t = torch.as_tensor(np.asarray(y, dtype=np.float32).reshape(-1, 1), device=self.device)
@@ -253,7 +252,7 @@ class DiffPO:
         self,
         x: torch.Tensor,
         treatment: torch.Tensor,
-        generator: torch.Generator | None,
+        generator: Optional[torch.Generator],
     ) -> torch.Tensor:
         y_current = torch.randn(x.shape[0], 1, generator=generator, device=self.device)
         self.denoiser.eval()
@@ -275,11 +274,11 @@ class DiffPO:
 
     def sample_potential(
         self,
-        x: np.ndarray,
-        treatment: np.ndarray | int,
+        x: NDArray[np.float32],
+        treatment: NDArray[np.int64] | int,
         n_per_x: int = 1,
-        seed: int | None = None,
-    ) -> np.ndarray:
+        seed: Optional[int] = None,
+    ) -> NDArray[np.float32]:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -312,7 +311,7 @@ class DiffPO:
         result = np.concatenate(outputs, axis=0).reshape(n, n_per_x, 1)
         return result.astype(np.float32)
 
-    def predict_potential_outcomes(self, x: np.ndarray, n_mc: int = 512) -> np.ndarray:
+    def predict_potential_outcomes(self, x: NDArray[np.float32], n_mc: int = 512) -> NDArray[np.float32]:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]

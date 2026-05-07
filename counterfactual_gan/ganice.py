@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 
 from .metrics import continuous_conditional_w1_grid
-from .neural import AdversarialDiagnostics, AnchoredOutcomeCritic, BoundedMLP, build_mlp, sample_latent
+from .neural import ActivationName, AdversarialDiagnostics, AnchoredOutcomeCritic, BoundedMLP, build_mlp, sample_latent
 from .utils import ensure_2d, ensure_row_matrix
 
 
-def _resolution_levels(resolution: int | tuple[int, ...], dim: int) -> np.ndarray:
+def _resolution_levels(resolution: int | Tuple[int, ...], dim: int) -> NDArray[np.int64]:
     if isinstance(resolution, tuple):
         if len(resolution) != dim:
             raise ValueError("resolution must have length d_cell_w")
@@ -23,11 +25,11 @@ def _resolution_levels(resolution: int | tuple[int, ...], dim: int) -> np.ndarra
     return levels
 
 
-def _num_cells(levels: np.ndarray) -> int:
+def _num_cells(levels: NDArray[np.int64]) -> int:
     return int(np.prod(2**levels))
 
 
-def _cell_indices(w: np.ndarray, levels: np.ndarray) -> np.ndarray:
+def _cell_indices(w: NDArray[np.float32], levels: NDArray[np.int64]) -> NDArray[np.int64]:
     w_arr = ensure_row_matrix(w)
     sides = 2**levels
     clipped = np.minimum(np.maximum(w_arr, 0.0), np.nextafter(1.0, 0.0))
@@ -38,7 +40,7 @@ def _cell_indices(w: np.ndarray, levels: np.ndarray) -> np.ndarray:
     return (grid * multipliers.reshape(1, -1)).sum(axis=1).astype(np.int64)
 
 
-def _cell_midpoints(cell_ids: np.ndarray, levels: np.ndarray) -> np.ndarray:
+def _cell_midpoints(cell_ids: NDArray[np.int64], levels: NDArray[np.int64]) -> NDArray[np.float32]:
     ids = np.asarray(cell_ids, dtype=np.int64).reshape(-1)
     sides = 2**levels
     coords = np.zeros((ids.shape[0], levels.shape[0]), dtype=np.float32)
@@ -50,7 +52,7 @@ def _cell_midpoints(cell_ids: np.ndarray, levels: np.ndarray) -> np.ndarray:
 
 
 def _cell_transport_loss(cells: torch.Tensor, real_y: torch.Tensor, fake_y: torch.Tensor) -> torch.Tensor:
-    losses: list[torch.Tensor] = []
+    losses: List[torch.Tensor] = []
     total = float(cells.shape[0])
     for cell in cells.unique(sorted=True).tolist():
         mask = cells == cell
@@ -71,10 +73,10 @@ class _CellConditionalGenerator(nn.Module):
         w_dim: int,
         latent_dim: int,
         y_dim: int,
-        hidden_dims: tuple[int, ...],
+        hidden_dims: Tuple[int, ...],
         outcome_lower: float,
         outcome_upper: float,
-        activation: str,
+        activation: ActivationName,
     ) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
@@ -108,10 +110,10 @@ class _SharedConditionalGenerator(nn.Module):
         w_dim: int,
         latent_dim: int,
         y_dim: int,
-        hidden_dims: tuple[int, ...],
+        hidden_dims: Tuple[int, ...],
         outcome_lower: float,
         outcome_upper: float,
-        activation: str,
+        activation: ActivationName,
     ) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
@@ -135,9 +137,9 @@ class _CellOutcomeCritic(nn.Module):
         self,
         num_cells: int,
         y_dim: int,
-        hidden_dims: tuple[int, ...],
-        anchor: np.ndarray,
-        activation: str,
+        hidden_dims: Tuple[int, ...],
+        anchor: NDArray[np.float32],
+        activation: ActivationName,
     ) -> None:
         super().__init__()
         self.experts = nn.ModuleList(
@@ -152,7 +154,7 @@ class _CellOutcomeCritic(nn.Module):
             ]
         )
 
-    def forward(self, cells: torch.Tensor, y: torch.Tensor, w: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, cells: torch.Tensor, y: torch.Tensor, w: Optional[torch.Tensor] = None) -> torch.Tensor:
         del w
         outputs = torch.zeros(y.shape[0], 1, device=y.device, dtype=y.dtype)
         for cell in cells.unique(sorted=True).tolist():
@@ -167,9 +169,9 @@ class _CellContextOutcomeCritic(nn.Module):
         num_cells: int,
         w_dim: int,
         y_dim: int,
-        hidden_dims: tuple[int, ...],
-        anchor: np.ndarray,
-        activation: str,
+        hidden_dims: Tuple[int, ...],
+        anchor: NDArray[np.float32],
+        activation: ActivationName,
     ) -> None:
         super().__init__()
         self.experts = nn.ModuleList(
@@ -177,7 +179,7 @@ class _CellContextOutcomeCritic(nn.Module):
         )
         self.register_buffer("anchor", torch.as_tensor(anchor.reshape(1, -1), dtype=torch.float32))
 
-    def forward(self, cells: torch.Tensor, y: torch.Tensor, w: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, cells: torch.Tensor, y: torch.Tensor, w: Optional[torch.Tensor] = None) -> torch.Tensor:
         if w is None:
             raise ValueError("context critic requires w")
         outputs = torch.zeros(y.shape[0], 1, device=y.device, dtype=y.dtype)
@@ -196,7 +198,7 @@ def _cell_gradient_penalty(
     cells: torch.Tensor,
     real_y: torch.Tensor,
     fake_y: torch.Tensor,
-    w: torch.Tensor | None = None,
+    w: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     alpha = torch.rand(real_y.shape[0], 1, device=real_y.device, dtype=real_y.dtype)
     alpha = alpha.expand_as(real_y)
@@ -218,17 +220,17 @@ def _cell_gradient_penalty(
 @dataclass(slots=True)
 class GANICEConfig:
     latent_dim: int = 2
-    hidden_dims_generator: tuple[int, ...] = (64, 64)
-    hidden_dims_critic: tuple[int, ...] = (64, 64)
+    hidden_dims_generator: Tuple[int, ...] = (64, 64)
+    hidden_dims_critic: Tuple[int, ...] = (64, 64)
     batch_size: int = 128
     num_steps: int = 420
     critic_steps: int = 4
     generator_lr: float = 2e-4
     critic_lr: float = 1e-4
-    betas: tuple[float, float] = (0.0, 0.9)
+    betas: Tuple[float, float] = (0.0, 0.9)
     gradient_penalty_weight: float = 10.0
     generator_transport_weight: float = 4.0
-    resolution: int | tuple[int, ...] = 2
+    resolution: int | Tuple[int, ...] = 2
     min_cell_samples: int = 8
     target_mass_samples: int = 20_000
     cell_normalized: bool = True
@@ -248,7 +250,7 @@ class GANICEConfig:
     outcome_lower: float = -3.0
     outcome_upper: float = 3.0
     critic_anchor: float = 0.0
-    activation: str = "elu"
+    activation: ActivationName = "elu"
     max_predict_batch: int = 65_536
     device: str = "cpu"
     seed: int = 123
@@ -269,7 +271,7 @@ class GANICE:
         target_w_sampler,
         config: GANICEConfig,
         *,
-        d_cell_w: int | None = None,
+        d_cell_w: Optional[int] = None,
         cell_transform=None,
     ) -> None:
         self.d_w = int(d_w)
@@ -284,16 +286,16 @@ class GANICE:
         self.num_cells = _num_cells(self.levels)
         self.generator: _CellConditionalGenerator | _SharedConditionalGenerator | None = None
         self.critic: _CellOutcomeCritic | _CellContextOutcomeCritic | None = None
-        self.generator_optimizer: torch.optim.Optimizer | None = None
-        self.critic_optimizer: torch.optim.Optimizer | None = None
-        self.y_dim: int | None = None
-        self.target_q: np.ndarray | None = None
-        self.training_target_q: np.ndarray | None = None
-        self.observed_counts: np.ndarray | None = None
-        self.active_cells: np.ndarray | None = None
-        self.cell_alias: np.ndarray | None = None
+        self.generator_optimizer: Optional[torch.optim.Optimizer] = None
+        self.critic_optimizer: Optional[torch.optim.Optimizer] = None
+        self.y_dim: Optional[int] = None
+        self.target_q: Optional[NDArray[np.float64]] = None
+        self.training_target_q: Optional[NDArray[np.float64]] = None
+        self.observed_counts: Optional[NDArray[np.int64]] = None
+        self.active_cells: Optional[NDArray[np.int64]] = None
+        self.cell_alias: Optional[NDArray[np.int64]] = None
         self.target_mass_coverage: float = 0.0
-        self.residual_calibration: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self.residual_calibration: Dict[int, Tuple[NDArray[np.float32], NDArray[np.float32]]] = {}
         self.diagnostics = AdversarialDiagnostics()
 
     def _build_networks(self, y_dim: int) -> None:
@@ -347,7 +349,7 @@ class GANICE:
             betas=self.config.betas,
         )
 
-    def _cell_coordinates(self, w: np.ndarray) -> np.ndarray:
+    def _cell_coordinates(self, w: NDArray[np.float32]) -> NDArray[np.float32]:
         w_arr = ensure_row_matrix(w)
         if self.cell_transform is None:
             cell_w = w_arr
@@ -356,22 +358,24 @@ class GANICE:
         if cell_w.shape[0] != w_arr.shape[0]:
             raise ValueError("cell_transform must preserve the number of rows")
         if cell_w.shape[1] != self.d_cell_w:
-            raise ValueError(
-                f"cell_transform returned {cell_w.shape[1]} columns, expected {self.d_cell_w}"
-            )
+            raise ValueError(f"cell_transform returned {cell_w.shape[1]} columns, expected {self.d_cell_w}")
         return cell_w.astype(np.float32)
 
-    def _cell_ids(self, w: np.ndarray) -> np.ndarray:
+    def _cell_ids(self, w: NDArray[np.float32]) -> NDArray[np.int64]:
         return _cell_indices(self._cell_coordinates(w), self.levels)
 
-    def _target_cell_masses(self, seed: int | None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _target_cell_masses(
+        self, seed: Optional[int] = None
+    ) -> Tuple[NDArray[np.float64], NDArray[np.float32], NDArray[np.int64]]:
         target_w = ensure_row_matrix(self.target_w_sampler(self.config.target_mass_samples, seed=seed))
         target_cells = self._cell_ids(target_w)
         counts = np.bincount(target_cells, minlength=self.num_cells).astype(np.float64)
         q = counts / np.maximum(counts.sum(), 1.0)
         return q, target_w.astype(np.float32), target_cells.astype(np.int64)
 
-    def _alias_target_cells(self, target_q: np.ndarray, observed_counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def _alias_target_cells(
+        self, target_q: NDArray[np.float64], observed_counts: NDArray[np.int64]
+    ) -> Tuple[NDArray[np.int64], NDArray[np.int64]]:
         """Route target-relevant sparse cells to nearby observed cells.
 
         The paper objective aggregates all target cell masses q_C.  In finite
@@ -396,7 +400,7 @@ class GANICE:
             active_midpoints = _cell_midpoints(active_cells, self.levels)
             inactive_midpoints = _cell_midpoints(inactive, self.levels)
             for idx, cell in enumerate(inactive.tolist()):
-                nearest = int(np.argmin(np.sum((active_midpoints - inactive_midpoints[idx : idx + 1]) ** 2, axis=1)))
+                nearest = int(np.argmin(np.sum((active_midpoints - inactive_midpoints[idx: idx + 1]) ** 2, axis=1)))
                 alias[int(cell)] = int(active_cells[nearest])
 
         routed_q = np.zeros(self.num_cells, dtype=np.float64)
@@ -414,7 +418,7 @@ class GANICE:
     def _sample_from_cell_lists(
         self,
         cell_batch: torch.Tensor,
-        index_by_cell: dict[int, torch.Tensor],
+        index_by_cell: Dict[int, torch.Tensor],
     ) -> torch.Tensor:
         sampled = torch.empty(cell_batch.shape[0], dtype=torch.long, device=self.device)
         for cell in cell_batch.unique(sorted=True).tolist():
@@ -428,8 +432,8 @@ class GANICE:
         self,
         w_t: torch.Tensor,
         y_t: torch.Tensor,
-        obs_index_by_cell: dict[int, torch.Tensor],
-        active_cells: np.ndarray,
+        obs_index_by_cell: Dict[int, torch.Tensor],
+        active_cells: NDArray[np.int64],
         seed: int,
     ) -> None:
         self.residual_calibration = {}
@@ -447,11 +451,16 @@ class GANICE:
                 n_cell = int(w_cell.shape[0])
                 repeated_w = w_cell.repeat_interleave(k, dim=0)
                 repeated_cells = torch.full((n_cell * k,), int(cell), dtype=torch.long, device=self.device)
-                fake = self.generator(
-                    repeated_w,
-                    repeated_cells,
-                    sample_latent(n_cell * k, self.config.latent_dim, self.device, seed=seed + int(cell)),
-                ).reshape(n_cell, k).cpu().numpy()
+                fake = (
+                    self.generator(
+                        repeated_w,
+                        repeated_cells,
+                        sample_latent(n_cell * k, self.config.latent_dim, self.device, seed=seed + int(cell)),
+                    )
+                    .reshape(n_cell, k)
+                    .cpu()
+                    .numpy()
+                )
                 centers = fake.mean(axis=1)
                 fake_residual = (fake - centers[:, None]).reshape(-1)
                 real_residual = y_t[idx].reshape(-1).cpu().numpy() - centers
@@ -469,7 +478,7 @@ class GANICE:
                 )
         self.generator.train()
 
-    def _apply_residual_quantile_calibration(self, samples: np.ndarray, cell: int) -> np.ndarray:
+    def _apply_residual_quantile_calibration(self, samples: NDArray[np.float32], cell: int) -> NDArray[np.float32]:
         if self.y_dim != 1 or not self.residual_calibration:
             return samples
         calibration = self.residual_calibration.get(int(cell))
@@ -484,7 +493,7 @@ class GANICE:
         values = (1.0 - blend) * values + blend * calibrated.astype(np.float32)
         return values.reshape(samples.shape).astype(np.float32)
 
-    def fit(self, w_obs: np.ndarray, outcomes: np.ndarray, seed: int | None = None) -> "GANICE":
+    def fit(self, w_obs: NDArray[np.float32], outcomes: NDArray[np.float32], seed: Optional[int] = None) -> "GANICE":
         rng = np.random.default_rng(self.config.seed if seed is None else seed)
         w_arr = ensure_row_matrix(w_obs)
         y_arr = ensure_2d(outcomes)
@@ -493,9 +502,7 @@ class GANICE:
 
         obs_cells = self._cell_ids(w_arr)
         observed_counts = np.bincount(obs_cells, minlength=self.num_cells).astype(np.int64)
-        target_q, target_pool_w, target_pool_cells = self._target_cell_masses(
-            seed=int(rng.integers(0, 2**31 - 1))
-        )
+        target_q, target_pool_w, target_pool_cells = self._target_cell_masses(seed=int(rng.integers(0, 2**31 - 1)))
         cell_alias, active_cells = self._alias_target_cells(target_q, observed_counts)
         routed_target_pool_cells = target_pool_cells.copy()
         target_pool_mask = target_pool_cells >= 0
@@ -717,7 +724,7 @@ class GANICE:
         )
         return self
 
-    def _route_query_cells(self, queries: np.ndarray) -> np.ndarray:
+    def _route_query_cells(self, queries: NDArray[np.float32]) -> NDArray[np.int64]:
         cells = self._cell_ids(queries)
         if self.active_cells is None:
             raise ValueError("model has not been fitted")
@@ -735,11 +742,11 @@ class GANICE:
         for idx, cell in enumerate(cells):
             if int(cell) in active_set:
                 continue
-            nearest = int(np.argmin(np.sum((active_midpoints - query_midpoints[idx : idx + 1]) ** 2, axis=1)))
+            nearest = int(np.argmin(np.sum((active_midpoints - query_midpoints[idx: idx + 1]) ** 2, axis=1)))
             routed[idx] = int(self.active_cells[nearest])
         return routed
 
-    def sample_conditional(self, w: np.ndarray, n: int, seed: int | None = None) -> np.ndarray:
+    def sample_conditional(self, w: NDArray[np.float32], n: int, seed: Optional[int] = None) -> NDArray[np.float32]:
         if self.generator is None:
             raise ValueError("model has not been fitted")
         query = ensure_row_matrix(w)
@@ -752,22 +759,26 @@ class GANICE:
         with torch.no_grad():
             w_t = torch.as_tensor(repeated_w, dtype=torch.float32, device=self.device)
             cells_t = torch.as_tensor(repeated_cells, dtype=torch.long, device=self.device)
-            samples = self.generator(
-                w_t,
-                cells_t,
-                sample_latent(n, self.config.latent_dim, self.device, seed=seed),
-            ).cpu().numpy()
+            samples = (
+                self.generator(
+                    w_t,
+                    cells_t,
+                    sample_latent(n, self.config.latent_dim, self.device, seed=seed),
+                )
+                .cpu()
+                .numpy()
+            )
         self.generator.train()
         samples = self._apply_residual_quantile_calibration(samples, int(cell[0]))
         return samples.astype(np.float32)
 
-    def predict_mean(self, queries: np.ndarray, n_mc: int = 1024) -> np.ndarray:
+    def predict_mean(self, queries: NDArray[np.float32], n_mc: int = 1024) -> NDArray[np.float32]:
         if self.generator is None:
             raise ValueError("model has not been fitted")
         query_arr = ensure_row_matrix(queries)
         cells = self._route_query_cells(query_arr)
         total = query_arr.shape[0] * n_mc
-        outputs: list[np.ndarray] = []
+        outputs: List[NDArray[np.float32]] = []
         self.generator.eval()
         with torch.no_grad():
             start = 0
@@ -778,11 +789,15 @@ class GANICE:
                 cell_chunk = cells[flat_indices]
                 w_t = torch.as_tensor(w_chunk, dtype=torch.float32, device=self.device)
                 cells_t = torch.as_tensor(cell_chunk, dtype=torch.long, device=self.device)
-                samples = self.generator(
-                    w_t,
-                    cells_t,
-                    sample_latent(w_t.shape[0], self.config.latent_dim, self.device, seed=70_000 + start),
-                ).cpu().numpy()
+                samples = (
+                    self.generator(
+                        w_t,
+                        cells_t,
+                        sample_latent(w_t.shape[0], self.config.latent_dim, self.device, seed=70_000 + start),
+                    )
+                    .cpu()
+                    .numpy()
+                )
                 outputs.append(samples)
                 start = stop
         self.generator.train()

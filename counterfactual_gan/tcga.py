@@ -5,9 +5,10 @@ import io
 import sqlite3
 import urllib.request
 from pathlib import Path
-from typing import Literal
+from typing import Dict, Literal, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 
 from .utils import ensure_row_matrix, make_rng
 
@@ -32,17 +33,17 @@ def _tcga_db_is_readable(db_path: Path) -> bool:
     return bool(count and int(count[0]) > 0)
 
 
-def _sigmoid(x: np.ndarray) -> np.ndarray:
+def _sigmoid(x: NDArray) -> NDArray:
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def _softmax_rows(x: np.ndarray) -> np.ndarray:
+def _softmax_rows(x: NDArray) -> NDArray:
     shifted = x - np.max(x, axis=1, keepdims=True)
     exp = np.exp(shifted)
     return exp / np.sum(exp, axis=1, keepdims=True)
 
 
-def _decode_sqlite_array(value: object) -> np.ndarray:
+def _decode_sqlite_array(value: object) -> NDArray:
     if isinstance(value, np.ndarray):
         return value.astype(np.float32, copy=False)
     if isinstance(value, memoryview):
@@ -110,7 +111,7 @@ def extract_tcga_gene_expression(
     cache_name: str | None = None,
     force: bool = False,
     log_normalize: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> Tuple[NDArray, NDArray]:
     """Extract the SCIGAN/DRNet TCGA RNA-seq feature matrix.
 
     The DRNet release stores raw samples in ``tcga.db`` as numpy arrays inside
@@ -151,16 +152,16 @@ def extract_tcga_gene_expression(
 
 @dataclass(slots=True)
 class TCGADoseData:
-    x_raw: np.ndarray
-    x: np.ndarray
-    z: np.ndarray
-    train_idx: np.ndarray
-    val_idx: np.ndarray
-    test_idx: np.ndarray
-    selected_gene_indices: np.ndarray
-    feature_mean: np.ndarray
-    feature_scale: np.ndarray
-    pc_components: np.ndarray
+    x_raw: NDArray
+    x: NDArray
+    z: NDArray
+    train_idx: NDArray
+    val_idx: NDArray
+    test_idx: NDArray
+    selected_gene_indices: NDArray
+    feature_mean: NDArray
+    feature_scale: NDArray
+    pc_components: NDArray
 
 
 @dataclass(slots=True)
@@ -175,16 +176,16 @@ class TCGADoseDGP:
     alpha_d: float = 8.0
     seed: int = 991
     data: TCGADoseData = field(init=False)
-    v: np.ndarray = field(init=False)
-    r: np.ndarray = field(init=False)
-    theta: np.ndarray = field(init=False)
-    q: np.ndarray = field(init=False)
-    s: np.ndarray = field(init=False)
-    u1: np.ndarray = field(init=False)
-    u2: np.ndarray = field(init=False)
-    lambda_a: np.ndarray = field(init=False)
-    rho_a: np.ndarray = field(init=False)
-    intercept: np.ndarray = field(init=False)
+    v: NDArray = field(init=False)
+    r: NDArray = field(init=False)
+    theta: NDArray = field(init=False)
+    q: NDArray = field(init=False)
+    s: NDArray = field(init=False)
+    u1: NDArray = field(init=False)
+    u2: NDArray = field(init=False)
+    lambda_a: NDArray = field(init=False)
+    rho_a: NDArray = field(init=False)
+    intercept: NDArray = field(init=False)
 
     def __post_init__(self) -> None:
         features, selected = extract_tcga_gene_expression(self.data_dir, num_features=self.num_features)
@@ -200,18 +201,18 @@ class TCGADoseDGP:
         return self.feature_dim + 2
 
     @property
-    def dosage_grid(self) -> np.ndarray:
+    def dosage_grid(self) -> NDArray:
         return np.linspace(0.0, 1.0, 21, dtype=np.float32)
 
-    def _make_data(self, features: np.ndarray, selected: np.ndarray) -> TCGADoseData:
+    def _make_data(self, features: NDArray, selected: NDArray) -> TCGADoseData:
         rng = make_rng(self.seed)
         n = features.shape[0]
         perm = rng.permutation(n)
         n_train = int(round(0.64 * n))
         n_val = int(round(0.16 * n))
         train_idx = perm[:n_train]
-        val_idx = perm[n_train : n_train + n_val]
-        test_idx = perm[n_train + n_val :]
+        val_idx = perm[n_train: n_train + n_val]
+        test_idx = perm[n_train + n_val:]
 
         train = features[train_idx]
         mean = train.mean(axis=0, keepdims=True)
@@ -255,7 +256,7 @@ class TCGADoseDGP:
         self.rho_a = rng.uniform(-0.30, 0.30, size=self.num_treatments).astype(np.float32)
         self.intercept = rng.normal(0.0, 0.12, size=self.num_treatments).astype(np.float32)
 
-    def split_arrays(self, split: Literal["train", "val", "test"]) -> tuple[np.ndarray, np.ndarray]:
+    def split_arrays(self, split: Literal["train", "val", "test"]) -> Tuple[NDArray, NDArray]:
         if split == "train":
             idx = self.data.train_idx
         elif split == "val":
@@ -266,11 +267,11 @@ class TCGADoseDGP:
             raise ValueError("split must be one of train, val, or test")
         return self.data.x[idx], self.data.z[idx]
 
-    def treatment_embedding(self, treatment: np.ndarray | int) -> np.ndarray:
+    def treatment_embedding(self, treatment: NDArray | int) -> NDArray:
         treatment_arr = np.asarray(treatment, dtype=np.float32).reshape(-1)
         return ((treatment_arr + 0.5) / float(self.num_treatments)).astype(np.float32)
 
-    def encode_w(self, x: np.ndarray, treatment: np.ndarray | int, dosage: np.ndarray | float) -> np.ndarray:
+    def encode_w(self, x: NDArray, treatment: NDArray | int, dosage: NDArray | float) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[None, :]
@@ -285,7 +286,9 @@ class TCGADoseDGP:
             raise ValueError("treatment and dosage must be scalar or align with x")
         return np.column_stack([x_arr, self.treatment_embedding(treatment_arr), dosage_arr]).astype(np.float32)
 
-    def sample_target_w(self, n: int, seed: int | None = None, split: Literal["train", "val", "test"] = "train") -> np.ndarray:
+    def sample_target_w(
+        self, n: int, seed: Optional[int] = None, split: Literal["train", "val", "test"] = "train"
+    ) -> NDArray:
         rng = make_rng(seed)
         x_pool, _ = self.split_arrays(split)
         draw = rng.integers(0, x_pool.shape[0], size=n)
@@ -293,16 +296,16 @@ class TCGADoseDGP:
         dosage = rng.choice(self.dosage_grid, size=n, replace=True)
         return self.encode_w(x_pool[draw], treatment, dosage)
 
-    def treatment_propensity(self, z: np.ndarray) -> np.ndarray:
+    def treatment_propensity(self, z: NDArray) -> NDArray:
         z_arr = ensure_row_matrix(z)
         logits = self.gamma_a * (z_arr @ self.v.T)
         return _softmax_rows(logits).astype(np.float32)
 
-    def optimal_dosage(self, z: np.ndarray, treatment: int) -> np.ndarray:
+    def optimal_dosage(self, z: NDArray, treatment: int) -> NDArray:
         z_arr = ensure_row_matrix(z)
         return _sigmoid(z_arr @ self.r[int(treatment)].reshape(-1, 1)).reshape(-1).astype(np.float32)
 
-    def response_mean(self, z: np.ndarray, treatment: int, dosage: np.ndarray | float) -> np.ndarray:
+    def response_mean(self, z: NDArray, treatment: int, dosage: NDArray | float) -> NDArray:
         z_arr = ensure_row_matrix(z)
         dosage_arr = np.asarray(dosage, dtype=np.float32).reshape(-1)
         if dosage_arr.size == 1 and z_arr.shape[0] > 1:
@@ -318,10 +321,10 @@ class TCGADoseDGP:
 
     def _mixture_params(
         self,
-        z: np.ndarray,
-        treatment: np.ndarray | int,
-        dosage: np.ndarray | float,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        z: NDArray,
+        treatment: NDArray | int,
+        dosage: NDArray | float,
+    ) -> Tuple[NDArray, NDArray, NDArray, NDArray, NDArray]:
         z_arr = ensure_row_matrix(z)
         n = z_arr.shape[0]
         treatment_arr = np.asarray(treatment, dtype=np.int64).reshape(-1)
@@ -350,11 +353,11 @@ class TCGADoseDGP:
 
     def sample_potential(
         self,
-        z: np.ndarray,
-        treatment: np.ndarray | int,
-        dosage: np.ndarray | float,
-        seed: int | None = None,
-    ) -> np.ndarray:
+        z: NDArray,
+        treatment: NDArray | int,
+        dosage: NDArray | float,
+        seed: Optional[int] = None,
+    ) -> NDArray:
         rng = make_rng(seed)
         eta, pi, delta, sigma1, sigma2 = self._mixture_params(z, treatment, dosage)
         first_component = rng.random(eta.shape[0]) < pi
@@ -365,13 +368,13 @@ class TCGADoseDGP:
         y[~first_component] = rng.normal(mean2[~first_component], sigma2[~first_component])
         return y.reshape(-1, 1).astype(np.float32)
 
-    def sample_observed(self, split: Literal["train", "val", "test"], seed: int | None = None) -> dict[str, np.ndarray]:
+    def sample_observed(self, split: Literal["train", "val", "test"], seed: Optional[int] = None) -> Dict[str, NDArray]:
         rng = make_rng(seed)
         x, z = self.split_arrays(split)
         probs = self.treatment_propensity(z)
         uniforms = rng.random(x.shape[0])
         treatment = np.sum(uniforms[:, None] > np.cumsum(probs, axis=1), axis=1).astype(np.int64)
-        d_star = np.array([self.optimal_dosage(z[i : i + 1], int(treatment[i]))[0] for i in range(x.shape[0])])
+        d_star = np.array([self.optimal_dosage(z[i: i + 1], int(treatment[i]))[0] for i in range(x.shape[0])])
         alpha = 1.0 + self.alpha_d * d_star
         beta = 1.0 + self.alpha_d * (1.0 - d_star)
         dosage = rng.beta(alpha, beta).astype(np.float32)

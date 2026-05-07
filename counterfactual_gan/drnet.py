@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
 def _make_mlp(input_dim: int, hidden_dim: int, num_layers: int) -> nn.Sequential:
-    layers: list[nn.Module] = []
+    layers: List[nn.Module] = []
     current_dim = input_dim
     for _ in range(num_layers):
         layers.append(nn.Linear(current_dim, hidden_dim))
@@ -95,7 +97,11 @@ class DRNetModule(nn.Module):
         )
 
     def _strata(self, dosage: torch.Tensor) -> torch.Tensor:
-        dosage = torch.clamp(dosage.reshape(-1), 0.0, torch.nextafter(torch.tensor(1.0, device=dosage.device), torch.tensor(0.0, device=dosage.device)))
+        dosage = torch.clamp(
+            dosage.reshape(-1),
+            0.0,
+            torch.nextafter(torch.tensor(1.0, device=dosage.device), torch.tensor(0.0, device=dosage.device)),
+        )
         return torch.floor(dosage * self.num_strata).long().clamp(0, self.num_strata - 1)
 
     def forward(self, x: torch.Tensor, treatment: torch.Tensor, dosage: torch.Tensor) -> torch.Tensor:
@@ -169,7 +175,7 @@ class DRNet:
         )
         self.y_mean = 0.0
         self.y_scale = 1.0
-        self.loss_history: list[float] = []
+        self.loss_history: List[float] = []
 
     def _sample_batch(self, n: int) -> torch.Tensor:
         batch_size = min(self.config.batch_size, n)
@@ -186,14 +192,20 @@ class DRNet:
         self.y_scale = scale if scale > 1e-6 else 1.0
         return ((y_arr - self.y_mean) / self.y_scale).astype(np.float32)
 
-    def fit(self, x: np.ndarray, treatment: np.ndarray, dosage: np.ndarray, y: np.ndarray) -> "DRNet":
+    def fit(
+        self, x: NDArray[np.float32], treatment: NDArray[np.int64], dosage: NDArray[np.float32], y: NDArray[np.float32]
+    ) -> "DRNet":
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
         treatment_arr = np.asarray(treatment, dtype=np.int64).reshape(-1)
         dosage_arr = np.asarray(dosage, dtype=np.float32).reshape(-1)
         y_arr = self._normalize_y(y)
-        if x_arr.shape[0] != treatment_arr.shape[0] or x_arr.shape[0] != dosage_arr.shape[0] or x_arr.shape[0] != y_arr.shape[0]:
+        if (
+            x_arr.shape[0] != treatment_arr.shape[0]
+            or x_arr.shape[0] != dosage_arr.shape[0]
+            or x_arr.shape[0] != y_arr.shape[0]
+        ):
             raise ValueError("x, treatment, dosage, and y must have the same number of rows")
         if x_arr.shape[1] != self.config.x_dim:
             raise ValueError(f"x has {x_arr.shape[1]} columns, expected {self.config.x_dim}")
@@ -215,7 +227,9 @@ class DRNet:
                 self.loss_history.append(float(loss.detach().cpu().item()))
         return self
 
-    def predict_response(self, x: np.ndarray, treatment: np.ndarray | int, dosage: np.ndarray | float) -> np.ndarray:
+    def predict_response(
+        self, x: NDArray[np.float32], treatment: NDArray[np.int64] | int, dosage: NDArray[np.float32] | float
+    ) -> NDArray[np.float32]:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -229,7 +243,7 @@ class DRNet:
         if treatment_arr.shape[0] != n or dosage_arr.shape[0] != n:
             raise ValueError("treatment and dosage must be scalar or align with x")
 
-        outputs: list[np.ndarray] = []
+        outputs: List[NDArray[np.float32]] = []
         self.model.eval()
         with torch.no_grad():
             start = 0

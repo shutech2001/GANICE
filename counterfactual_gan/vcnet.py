@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 from torch.nn import functional as F
+
+from .neural import ActivationName
 
 
 class TruncatedPowerBasis(nn.Module):
     """Truncated power spline basis on [0, 1] used by VCNet."""
 
-    def __init__(self, degree: int, knots: tuple[float, ...]) -> None:
+    def __init__(self, degree: int, knots: Tuple[float, ...]) -> None:
         super().__init__()
         if not isinstance(degree, int) or degree < 1:
             raise ValueError("degree must be a positive integer")
@@ -37,7 +41,7 @@ class VaryingCoefficientLinear(nn.Module):
         input_dim: int,
         output_dim: int,
         basis: TruncatedPowerBasis,
-        activation: str | None = "relu",
+        activation: ActivationName = "relu",
     ) -> None:
         super().__init__()
         self.basis = basis
@@ -49,7 +53,7 @@ class VaryingCoefficientLinear(nn.Module):
             self.activation = nn.ELU()
         elif activation == "tanh":
             self.activation = nn.Tanh()
-        elif activation in (None, "id", "linear"):
+        elif activation == "id":
             self.activation = None
         else:
             raise ValueError(f"unsupported activation: {activation}")
@@ -89,7 +93,7 @@ class DensityHead(nn.Module):
 
 
 class VCNetModule(nn.Module):
-    def __init__(self, x_dim: int, hidden_dim: int, num_grid: int, degree: int, knots: tuple[float, ...]) -> None:
+    def __init__(self, x_dim: int, hidden_dim: int, num_grid: int, degree: int, knots: Tuple[float, ...]) -> None:
         super().__init__()
         self.hidden_features = nn.Sequential(
             nn.Linear(x_dim, hidden_dim),
@@ -107,11 +111,11 @@ class VCNetModule(nn.Module):
         self.q_layers = nn.ModuleList(
             [
                 VaryingCoefficientLinear(hidden_dim, hidden_dim, basis, activation="relu"),
-                VaryingCoefficientLinear(hidden_dim, 1, basis, activation=None),
+                VaryingCoefficientLinear(hidden_dim, 1, basis, activation="id"),
             ]
         )
 
-    def forward(self, treatment: torch.Tensor, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, treatment: torch.Tensor, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         hidden = self.hidden_features(x)
         density = self.density_head(treatment, hidden)
         out = hidden
@@ -121,7 +125,7 @@ class VCNetModule(nn.Module):
 
 
 class TargetedRegularizer(nn.Module):
-    def __init__(self, degree: int, knots: tuple[float, ...]) -> None:
+    def __init__(self, degree: int, knots: Tuple[float, ...]) -> None:
         super().__init__()
         self.basis = TruncatedPowerBasis(degree, knots)
         self.weight = nn.Parameter(torch.zeros(self.basis.num_basis))
@@ -136,7 +140,7 @@ class VCNetConfig:
     hidden_dim: int = 50
     num_grid: int = 10
     spline_degree: int = 2
-    spline_knots: tuple[float, ...] = (1.0 / 3.0, 2.0 / 3.0)
+    spline_knots: Tuple[float, ...] = (1.0 / 3.0, 2.0 / 3.0)
     batch_size: int = 128
     num_steps: int = 1_200
     learning_rate: float = 1e-3
@@ -145,7 +149,7 @@ class VCNetConfig:
     standardize_outcome: bool = True
     targeted_regularization: bool = False
     tr_degree: int = 2
-    tr_knots: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+    tr_knots: Tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
     tr_weight: float = 1.0
     tr_learning_rate: float = 1e-3
     max_predict_batch: int = 65_536
@@ -200,7 +204,7 @@ class VCNet:
         batch_size = min(self.config.batch_size, n)
         return torch.randint(0, n, size=(batch_size,), device=self.device)
 
-    def _normalize_y(self, y: np.ndarray) -> np.ndarray:
+    def _normalize_y(self, y: NDArray) -> NDArray:
         y_arr = np.asarray(y, dtype=np.float32).reshape(-1, 1)
         if not self.config.standardize_outcome:
             self.y_mean = 0.0
@@ -229,7 +233,7 @@ class VCNet:
         targeted_q = q.reshape_as(y) + eps / (density.reshape_as(y) + 1e-6)
         return self.config.tr_weight * F.mse_loss(targeted_q, y)
 
-    def fit(self, x: np.ndarray, treatment: np.ndarray, y: np.ndarray) -> "VCNet":
+    def fit(self, x: NDArray, treatment: NDArray, y: NDArray) -> "VCNet":
         x_arr = np.asarray(x, dtype=np.float32)
         t_arr = np.asarray(treatment, dtype=np.float32).reshape(-1)
         y_arr = self._normalize_y(y)
@@ -265,7 +269,7 @@ class VCNet:
                 self.loss_history.append(float(loss.detach().cpu().item()))
         return self
 
-    def predict_response(self, x: np.ndarray, treatment: np.ndarray | float) -> np.ndarray:
+    def predict_response(self, x: NDArray, treatment: NDArray | float) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -275,7 +279,7 @@ class VCNet:
         if t_arr.shape[0] != x_arr.shape[0]:
             raise ValueError("treatment must be scalar or align with x")
 
-        outputs: list[np.ndarray] = []
+        outputs: List[NDArray] = []
         self.model.eval()
         if self.targeted_regularizer is not None:
             self.targeted_regularizer.eval()

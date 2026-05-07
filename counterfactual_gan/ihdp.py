@@ -6,9 +6,10 @@ from io import StringIO
 from pathlib import Path
 import csv
 import subprocess
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-
+from numpy.typing import NDArray
 from .utils import ensure_row_matrix, make_rng
 
 
@@ -101,10 +102,10 @@ def _stratified_split(
     seed: int,
     train_fraction: float,
     validation_fraction: float,
-) -> dict[str, np.ndarray]:
+) -> Dict[str, NDArray]:
     rng = make_rng(seed)
     indices_by_arm = [np.flatnonzero(treatment == arm) for arm in (0, 1)]
-    splits = {"train": [], "validation": [], "test": []}
+    splits: Dict[str, List[NDArray]] = {"train": [], "validation": [], "test": []}
     for arm_indices in indices_by_arm:
         permuted = rng.permutation(arm_indices)
         n = permuted.size
@@ -113,8 +114,8 @@ def _stratified_split(
         n_train = min(n_train, n)
         n_validation = min(n_validation, n - n_train)
         splits["train"].append(permuted[:n_train])
-        splits["validation"].append(permuted[n_train : n_train + n_validation])
-        splits["test"].append(permuted[n_train + n_validation :])
+        splits["validation"].append(permuted[n_train: n_train + n_validation])
+        splits["test"].append(permuted[n_train + n_validation:])
     output = {}
     for name, parts in splits.items():
         joined = np.concatenate(parts).astype(np.int64)
@@ -161,13 +162,13 @@ class IHDPDistDGP:
     train_fraction: float = 0.63
     validation_fraction: float = 0.27
     student_df: float = 5.0
-    raw: dict[str, np.ndarray] = field(init=False)
-    split_indices: dict[str, np.ndarray] = field(init=False)
-    continuous_indices: np.ndarray = field(init=False)
-    x_mean: np.ndarray = field(init=False)
-    x_std: np.ndarray = field(init=False)
-    x: np.ndarray = field(init=False)
-    treatment: np.ndarray = field(init=False)
+    raw: Dict[str, NDArray] = field(init=False)
+    split_indices: Dict[str, NDArray] = field(init=False)
+    continuous_indices: NDArray = field(init=False)
+    x_mean: NDArray = field(init=False)
+    x_std: NDArray = field(init=False)
+    x: NDArray = field(init=False)
+    treatment: NDArray = field(init=False)
     params: _IHDPDistParams = field(init=False)
 
     def __post_init__(self) -> None:
@@ -202,11 +203,11 @@ class IHDPDistDGP:
         return self.feature_dim + 1
 
     @staticmethod
-    def treatment_embedding(treatment: np.ndarray | int) -> np.ndarray:
+    def treatment_embedding(treatment: NDArray | int) -> NDArray:
         treatment_array = np.asarray(treatment, dtype=np.float32)
         return 0.25 + 0.5 * treatment_array
 
-    def transform_x(self, x_raw: np.ndarray) -> np.ndarray:
+    def transform_x(self, x_raw: NDArray) -> NDArray:
         x_arr = np.asarray(x_raw, dtype=np.float32)
         transformed = x_arr.copy()
         transformed[:, self.continuous_indices] = (
@@ -214,38 +215,38 @@ class IHDPDistDGP:
         ) / self.x_std[self.continuous_indices]
         return transformed.astype(np.float32)
 
-    def split(self, name: str) -> tuple[np.ndarray, np.ndarray]:
+    def split(self, name: str) -> Tuple[NDArray, NDArray]:
         if name not in self.split_indices:
             raise ValueError(f"unknown IHDP split {name!r}")
         idx = self.split_indices[name]
         return self.x[idx].astype(np.float32), self.treatment[idx].astype(np.int64)
 
-    def encode_w(self, x: np.ndarray, treatment: np.ndarray | int) -> np.ndarray:
+    def encode_w(self, x: NDArray, treatment: NDArray | int) -> NDArray:
         x_arr = ensure_row_matrix(x)
         treatment_embed = self.treatment_embedding(treatment).reshape(-1, 1)
         if treatment_embed.shape[0] == 1 and x_arr.shape[0] > 1:
             treatment_embed = np.repeat(treatment_embed, x_arr.shape[0], axis=0)
         return np.column_stack([x_arr, treatment_embed[:, 0]]).astype(np.float32)
 
-    def decode_w(self, w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def decode_w(self, w: NDArray) -> Tuple[NDArray, NDArray]:
         w_arr = ensure_row_matrix(w)
         return w_arr[:, : self.feature_dim].astype(np.float32), (w_arr[:, -1] > 0.5).astype(np.int64)
 
-    def sample_target_w(self, n: int, seed: int | None = None) -> np.ndarray:
+    def sample_target_w(self, n: int, seed: Optional[int] = None) -> NDArray:
         rng = make_rng(seed)
         x_test, _ = self.split("test")
         x = x_test[rng.integers(0, x_test.shape[0], size=n)]
         treatment = rng.binomial(1, 0.5, size=n).astype(np.int64)
         return self.encode_w(x, treatment)
 
-    def potential_means(self, x: np.ndarray) -> np.ndarray:
+    def potential_means(self, x: NDArray) -> NDArray:
         x_arr = ensure_row_matrix(x).astype(np.float64)
         p = self.params
         m0 = np.exp(0.2 * (x_arr @ p.b0.astype(np.float64))) - 1.0
         tau = 1.0 + 0.5 * np.tanh(x_arr @ p.btau.astype(np.float64))
         return np.column_stack([m0, m0 + tau]).astype(np.float32)
 
-    def _mixture_terms(self, x: np.ndarray, treatment: np.ndarray) -> tuple[np.ndarray, ...]:
+    def _mixture_terms(self, x: NDArray, treatment: NDArray) -> Tuple[NDArray, ...]:
         x_arr = ensure_row_matrix(x).astype(np.float64)
         treatment_arr = np.asarray(treatment, dtype=np.int64).reshape(-1)
         means = self.potential_means(x_arr).astype(np.float64)
@@ -270,11 +271,11 @@ class IHDPDistDGP:
 
     def sample_potential(
         self,
-        x: np.ndarray,
-        treatment: np.ndarray | int,
+        x: NDArray,
+        treatment: NDArray | int,
         n_per_x: int = 1,
-        seed: int | None = None,
-    ) -> np.ndarray:
+        seed: Optional[int] = None,
+    ) -> NDArray:
         x_arr = ensure_row_matrix(x)
         n = x_arr.shape[0]
         treatment_arr = np.asarray(treatment, dtype=np.int64).reshape(-1)
@@ -295,11 +296,11 @@ class IHDPDistDGP:
         )
         return values.reshape(n, n_per_x, 1).astype(np.float32)
 
-    def sample_conditional(self, w: np.ndarray, n: int, seed: int | None = None) -> np.ndarray:
+    def sample_conditional(self, w: NDArray, n: int, seed: Optional[int] = None) -> NDArray:
         x, treatment = self.decode_w(w)
         return self.sample_potential(x[:1], int(treatment[0]), n_per_x=n, seed=seed).reshape(n, 1)
 
-    def observed_split(self, name: str, seed: int | None = None) -> dict[str, np.ndarray]:
+    def observed_split(self, name: str, seed: Optional[int] = None) -> Dict[str, NDArray]:
         x, treatment = self.split(name)
         y = self.sample_potential(x, treatment, n_per_x=1, seed=seed).reshape(-1, 1)
         return {
@@ -310,7 +311,7 @@ class IHDPDistDGP:
             "mu": self.potential_means(x),
         }
 
-    def outcome_bounds(self, observed_y: np.ndarray, margin: float = 0.75) -> tuple[float, float]:
+    def outcome_bounds(self, observed_y: NDArray, margin: float = 0.75) -> Tuple[float, float]:
         y = np.asarray(observed_y, dtype=np.float64).reshape(-1)
         lower = float(np.quantile(y, 0.01) - margin)
         upper = float(np.quantile(y, 0.99) + margin)

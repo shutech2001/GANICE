@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+from typing import List, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-def _mlp(input_dim: int, hidden_dims: tuple[int, ...], output_dim: int) -> nn.Sequential:
-    layers: list[nn.Module] = []
+def _mlp(input_dim: int, hidden_dims: Tuple[int, ...], output_dim: int) -> nn.Sequential:
+    layers: List[nn.Module] = []
     prev = input_dim
     for width in hidden_dims:
         layers.append(nn.Linear(prev, width))
@@ -33,7 +35,7 @@ class _INFsNuisance(nn.Module):
         self.propensity = _mlp(hidden_dim, (hidden_dim,), num_treatments)
         self.conditional_density = _mlp(hidden_dim + num_treatments, (hidden_dim,), num_bins)
 
-    def forward(self, x: torch.Tensor, treatment: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, treatment: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         rep = self.representation(x)
         prop_logits = self.propensity(rep)
         treatment_onehot = F.one_hot(treatment, num_classes=self.num_treatments).to(dtype=x.dtype)
@@ -134,7 +136,7 @@ class INFs:
         self,
         logits: torch.Tensor,
         n_per_row: int,
-        generator: torch.Generator | None,
+        generator: Optional[torch.Generator] = None,
     ) -> torch.Tensor:
         probs = torch.softmax(logits, dim=-1)
         if probs.ndim == 1:
@@ -154,7 +156,7 @@ class INFs:
     def _sample_batch(self, n: int) -> torch.Tensor:
         return torch.randint(0, n, size=(min(self.config.batch_size, n),), device=self.device)
 
-    def fit(self, x: np.ndarray, treatment: np.ndarray, y: np.ndarray) -> "INFs":
+    def fit(self, x: NDArray, treatment: NDArray, y: NDArray) -> "INFs":
         x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
         treatment_t = torch.as_tensor(np.asarray(treatment, dtype=np.int64).reshape(-1), device=self.device)
         y_t = torch.as_tensor(np.asarray(y, dtype=np.float32).reshape(-1, 1), device=self.device)
@@ -227,11 +229,11 @@ class INFs:
 
     def sample_potential(
         self,
-        x: np.ndarray,
-        treatment: np.ndarray | int,
+        x: NDArray,
+        treatment: NDArray | int,
         n_per_x: int = 1,
-        seed: int | None = None,
-    ) -> np.ndarray:
+        seed: Optional[int] = None,
+    ) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -258,7 +260,7 @@ class INFs:
         self.target_logits.requires_grad_(True)
         return samples
 
-    def predict_potential_outcomes(self, x: np.ndarray, n_mc: int | None = None) -> np.ndarray:
+    def predict_potential_outcomes(self, x: NDArray, n_mc: Optional[int] = None) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -266,7 +268,7 @@ class INFs:
         means = (probs * self.bin_centers.reshape(1, -1)).sum(dim=1).cpu().numpy()
         return np.repeat(means.reshape(1, -1), x_arr.shape[0], axis=0).astype(np.float32)
 
-    def log_prob_potential(self, x: np.ndarray, treatment: np.ndarray | int, y: np.ndarray) -> np.ndarray:
+    def log_prob_potential(self, x: NDArray, treatment: NDArray | int, y: NDArray) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -288,9 +290,9 @@ class INFs:
         self.target_logits.requires_grad_(True)
         return log_prob.astype(np.float32)
 
-    def negative_log_likelihood(self, x: np.ndarray, treatment: np.ndarray | int, y: np.ndarray) -> float:
+    def negative_log_likelihood(self, x: NDArray, treatment: NDArray | int, y: NDArray) -> float:
         return float(-np.mean(self.log_prob_potential(x, treatment, y)))
 
-    def interventional_sample(self, treatment: int, n: int, seed: int | None = None) -> np.ndarray:
+    def interventional_sample(self, treatment: int, n: int, seed: Optional[int] = None) -> NDArray:
         x_dummy = np.zeros((n, self.config.x_dim), dtype=np.float32)
         return self.sample_potential(x_dummy, treatment, n_per_x=1, seed=seed).reshape(n, 1)

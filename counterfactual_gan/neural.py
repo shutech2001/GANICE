@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import List, Literal, Optional, Tuple
 
-import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 
 
-ActivationName = Literal["elu", "relu", "leaky_relu", "tanh"]
+ActivationName = Literal["id", "elu", "relu", "leaky_relu", "tanh"]
 
 
 def build_mlp(
     input_dim: int,
-    hidden_dims: tuple[int, ...],
+    hidden_dims: Tuple[int, ...],
     output_dim: int,
     activation: ActivationName = "elu",
 ) -> nn.Sequential:
-    layers: list[nn.Module] = []
+    layers: List[nn.Module] = []
     prev = input_dim
     for width in hidden_dims:
         layers.append(nn.Linear(prev, width))
@@ -67,8 +67,8 @@ class AnchoredOutcomeCritic(nn.Module):
     def __init__(
         self,
         y_dim: int,
-        hidden_dims: tuple[int, ...],
-        anchor: np.ndarray,
+        hidden_dims: Tuple[int, ...],
+        anchor: NDArray,
         activation: ActivationName = "elu",
     ) -> None:
         super().__init__()
@@ -84,7 +84,7 @@ def sample_latent(
     batch_size: int,
     latent_dim: int,
     device: torch.device,
-    seed: int | None = None,
+    seed: Optional[int] = None,
 ) -> torch.Tensor:
     if seed is None:
         return torch.rand(batch_size, latent_dim, device=device)
@@ -95,6 +95,6 @@ def sample_latent(
 
 @dataclass(slots=True)
 class AdversarialDiagnostics:
-    critic_losses: list[float] = field(default_factory=list)
-    generator_losses: list[float] = field(default_factory=list)
-    objective_gaps: list[float] = field(default_factory=list)
+    critic_losses: List[float] = field(default_factory=list)
+    generator_losses: List[float] = field(default_factory=list)
+    objective_gaps: List[float] = field(default_factory=list)

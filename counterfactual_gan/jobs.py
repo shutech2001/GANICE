@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 
 from .utils import ensure_row_matrix, make_rng
 
@@ -20,15 +22,17 @@ JOBS_FEATURE_COLUMNS = (
 JOBS_CONTINUOUS_INDICES = np.array([0, 1, 6], dtype=np.int64)
 
 
-def earnings_to_model_scale(earnings: np.ndarray) -> np.ndarray:
+def earnings_to_model_scale(earnings: NDArray) -> NDArray:
     return np.arcsinh(np.asarray(earnings, dtype=np.float64) / 1000.0).astype(np.float32)
 
 
-def model_scale_to_earnings(values: np.ndarray) -> np.ndarray:
+def model_scale_to_earnings(values: NDArray) -> NDArray:
     return (1000.0 * np.sinh(np.asarray(values, dtype=np.float64))).astype(np.float64)
 
 
-def _split_indices(n: int, rng: np.random.Generator, train_fraction: float, validation_fraction: float) -> dict[str, np.ndarray]:
+def _split_indices(
+    n: int, rng: np.random.Generator, train_fraction: float, validation_fraction: float
+) -> Dict[str, NDArray]:
     permuted = rng.permutation(np.arange(n, dtype=np.int64))
     n_train = int(round(train_fraction * n))
     n_validation = int(round(validation_fraction * n))
@@ -36,12 +40,12 @@ def _split_indices(n: int, rng: np.random.Generator, train_fraction: float, vali
     n_validation = min(n_validation, n - n_train)
     return {
         "train": permuted[:n_train],
-        "validation": permuted[n_train : n_train + n_validation],
-        "test": permuted[n_train + n_validation :],
+        "validation": permuted[n_train: n_train + n_validation],
+        "test": permuted[n_train + n_validation:],
     }
 
 
-def _read_jobs_file(path: Path, expected_columns: int) -> np.ndarray:
+def _read_jobs_file(path: Path, expected_columns: int) -> NDArray:
     array = np.loadtxt(path, dtype=np.float64)
     if array.ndim != 2 or array.shape[1] != expected_columns:
         raise ValueError(f"{path} has shape {array.shape}; expected (*, {expected_columns})")
@@ -128,11 +132,11 @@ class JobsLaLondeData:
         return self.feature_dim + 1
 
     @staticmethod
-    def treatment_embedding(treatment: np.ndarray | int) -> np.ndarray:
+    def treatment_embedding(treatment: NDArray | int) -> NDArray:
         treatment_array = np.asarray(treatment, dtype=np.float32)
         return 0.25 + 0.5 * treatment_array
 
-    def transform_x(self, x_raw: np.ndarray) -> np.ndarray:
+    def transform_x(self, x_raw: NDArray) -> NDArray:
         x_arr = np.asarray(x_raw, dtype=np.float32).copy()
         if x_arr.ndim == 1:
             x_arr = x_arr[None, :]
@@ -141,30 +145,30 @@ class JobsLaLondeData:
         ) / self.x_std[JOBS_CONTINUOUS_INDICES]
         return x_arr.astype(np.float32)
 
-    def encode_w(self, x: np.ndarray, treatment: np.ndarray | int) -> np.ndarray:
+    def encode_w(self, x: NDArray, treatment: NDArray | int) -> NDArray:
         x_arr = ensure_row_matrix(x)
         treatment_embed = self.treatment_embedding(treatment).reshape(-1, 1)
         if treatment_embed.shape[0] == 1 and x_arr.shape[0] > 1:
             treatment_embed = np.repeat(treatment_embed, x_arr.shape[0], axis=0)
         return np.column_stack([x_arr, treatment_embed[:, 0]]).astype(np.float32)
 
-    def decode_w(self, w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def decode_w(self, w: NDArray) -> Tuple[NDArray, NDArray]:
         w_arr = ensure_row_matrix(w)
         return w_arr[:, : self.feature_dim].astype(np.float32), (w_arr[:, -1] > 0.5).astype(np.int64)
 
-    def _source_split(self, source: str, split: str) -> np.ndarray:
+    def _source_split(self, source: str, split: str) -> NDArray:
         if split not in ("train", "validation", "test"):
             raise ValueError(f"unknown Jobs split {split!r}")
         return self._splits[source][split]
 
-    def _observed_x_raw(self, split: str) -> np.ndarray:
+    def _observed_x_raw(self, split: str) -> NDArray:
         parts = [self._nsw_treated_x_raw[self._source_split("nsw_treated", split)]]
         if self.include_nsw_control_in_observed:
             parts.append(self._nsw_control_x_raw[self._source_split("nsw_control", split)])
         parts.append(self._psid_control_x_raw[self._source_split("psid_control", split)])
         return np.concatenate(parts, axis=0).astype(np.float32)
 
-    def observed_split(self, split: str) -> dict[str, np.ndarray]:
+    def observed_split(self, split: str) -> Dict[str, NDArray]:
         treated_idx = self._source_split("nsw_treated", split)
         psid_idx = self._source_split("psid_control", split)
         x_parts = [self._nsw_treated_x_raw[treated_idx]]
@@ -200,7 +204,7 @@ class JobsLaLondeData:
             "source": source,
         }
 
-    def rct_split(self, split: str) -> dict[str, np.ndarray]:
+    def rct_split(self, split: str) -> Dict[str, NDArray]:
         treated_idx = self._source_split("nsw_treated", split)
         control_idx = self._source_split("nsw_control", split)
         x_raw = np.concatenate(
@@ -228,14 +232,14 @@ class JobsLaLondeData:
             "y_earnings": y_earn,
         }
 
-    def sample_target_w(self, n: int, seed: int | None = None, split: str = "test") -> np.ndarray:
+    def sample_target_w(self, n: int, seed: Optional[int] = None, split: str = "test") -> NDArray:
         rng = make_rng(seed)
         rct = self.rct_split(split)
         x = rct["x"][rng.integers(0, rct["x"].shape[0], size=n)]
         treatment = rng.binomial(1, 0.5, size=n).astype(np.int64)
         return self.encode_w(x, treatment)
 
-    def outcome_bounds(self, observed_y: np.ndarray, margin: float = 0.35) -> tuple[float, float]:
+    def outcome_bounds(self, observed_y: NDArray, margin: float = 0.35) -> Tuple[float, float]:
         y = np.asarray(observed_y, dtype=np.float64).reshape(-1)
         lower = 0.0
         upper = float(np.quantile(y, 0.995) + margin)
@@ -249,6 +253,6 @@ class JobsLaLondeData:
         control = rct["y_earnings"][rct["t"] == 0]
         return float(treated.mean() - control.mean())
 
-    def source_counts(self, split: str = "train") -> dict[str, int]:
+    def source_counts(self, split: str = "train") -> Dict[str, int]:
         observed = self.observed_split(split)
         return {source: int(np.sum(observed["source"] == source)) for source in np.unique(observed["source"])}

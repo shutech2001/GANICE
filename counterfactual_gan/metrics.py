@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Dict, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 
 
-def _as_nonempty_1d(values: np.ndarray, name: str) -> np.ndarray:
+def _as_nonempty_1d(values: NDArray, name: str) -> NDArray:
     array = np.asarray(values, dtype=np.float64).reshape(-1)
     if array.size == 0:
         raise ValueError(f"{name} must be non-empty")
     return array
 
 
-def sample_wasserstein_1_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
+def sample_wasserstein_1_1d(sample_a: NDArray, sample_b: NDArray) -> float:
     a = np.sort(_as_nonempty_1d(sample_a, "sample_a"))
     b = np.sort(_as_nonempty_1d(sample_b, "sample_b"))
     grid_size = max(a.size, b.size)
@@ -22,7 +23,7 @@ def sample_wasserstein_1_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float
     return float(np.mean(np.abs(qa - qb)))
 
 
-def mean_abs_between_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
+def mean_abs_between_1d(sample_a: NDArray, sample_b: NDArray) -> float:
     a = np.sort(_as_nonempty_1d(sample_a, "sample_a"))
     b = np.sort(_as_nonempty_1d(sample_b, "sample_b"))
     prefix = np.concatenate([[0.0], np.cumsum(a)])
@@ -32,18 +33,18 @@ def mean_abs_between_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
     return float(np.mean(left + right) / float(a.size))
 
 
-def mean_abs_within_1d(sample: np.ndarray) -> float:
+def mean_abs_within_1d(sample: NDArray) -> float:
     values = np.sort(_as_nonempty_1d(sample, "sample"))
     n = values.size
     coeff = 2.0 * np.arange(n, dtype=np.float64) - float(n) + 1.0
     return float(2.0 * np.sum(coeff * values) / float(n * n))
 
 
-def crps_empirical_1d(predicted: np.ndarray, observed: np.ndarray | float) -> float:
+def crps_empirical_1d(predicted: NDArray, observed: NDArray) -> float:
     return float(mean_abs_between_1d(predicted, observed) - 0.5 * mean_abs_within_1d(predicted))
 
 
-def energy_distance_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
+def energy_distance_1d(sample_a: NDArray, sample_b: NDArray) -> float:
     value = (
         2.0 * mean_abs_between_1d(sample_a, sample_b)
         - mean_abs_within_1d(sample_a)
@@ -52,13 +53,13 @@ def energy_distance_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
     return float(max(0.0, value))
 
 
-def empirical_cdf_values_1d(reference: np.ndarray, points: np.ndarray) -> np.ndarray:
+def empirical_cdf_values_1d(reference: NDArray, points: NDArray) -> NDArray:
     ref = np.sort(_as_nonempty_1d(reference, "reference"))
     query = np.asarray(points, dtype=np.float64).reshape(-1)
     return np.searchsorted(ref, query, side="right").astype(np.float64) / float(ref.size)
 
 
-def ks_2samp_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
+def ks_2samp_1d(sample_a: NDArray, sample_b: NDArray) -> float:
     a = _as_nonempty_1d(sample_a, "sample_a")
     b = _as_nonempty_1d(sample_b, "sample_b")
     grid = np.unique(np.concatenate([a, b]))
@@ -66,7 +67,7 @@ def ks_2samp_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
     return float(np.max(diff))
 
 
-def cvm_2samp_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
+def cvm_2samp_1d(sample_a: NDArray, sample_b: NDArray) -> float:
     a = _as_nonempty_1d(sample_a, "sample_a")
     b = _as_nonempty_1d(sample_b, "sample_b")
     diff_a = empirical_cdf_values_1d(a, a) - empirical_cdf_values_1d(b, a)
@@ -74,7 +75,7 @@ def cvm_2samp_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
     return float(0.5 * (np.mean(diff_a**2) + np.mean(diff_b**2)))
 
 
-def mmd2_gaussian_median_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float:
+def mmd2_gaussian_median_1d(sample_a: NDArray, sample_b: NDArray) -> float:
     a = _as_nonempty_1d(sample_a, "sample_a")
     b = _as_nonempty_1d(sample_b, "sample_b")
     pooled = np.concatenate([a, b])
@@ -94,9 +95,9 @@ def mmd2_gaussian_median_1d(sample_a: np.ndarray, sample_b: np.ndarray) -> float
 
 
 def quantile_squared_error_sum_1d(
-    predicted: np.ndarray,
-    truth: np.ndarray,
-    quantiles: np.ndarray,
+    predicted: NDArray,
+    truth: NDArray,
+    quantiles: NDArray,
 ) -> float:
     q = np.asarray(quantiles, dtype=np.float64)
     pred_q = np.quantile(_as_nonempty_1d(predicted, "predicted"), q, method="linear")
@@ -104,7 +105,7 @@ def quantile_squared_error_sum_1d(
     return float(np.sum((pred_q - true_q) ** 2))
 
 
-def tail_mean_error_1d(predicted: np.ndarray, truth: np.ndarray, levels: np.ndarray) -> float:
+def tail_mean_error_1d(predicted: NDArray, truth: NDArray, levels: NDArray) -> float:
     pred = _as_nonempty_1d(predicted, "predicted")
     true = _as_nonempty_1d(truth, "truth")
     total = 0.0
@@ -121,14 +122,14 @@ def tail_mean_error_1d(predicted: np.ndarray, truth: np.ndarray, levels: np.ndar
 
 
 def central_interval_coverage_width_1d(
-    predicted: np.ndarray,
-    truth: np.ndarray,
-    coverages: np.ndarray,
-) -> tuple[dict[float, float], dict[float, float]]:
+    predicted: NDArray,
+    truth: NDArray,
+    coverages: NDArray,
+) -> Tuple[Dict[float, float], Dict[float, float]]:
     pred = _as_nonempty_1d(predicted, "predicted")
     true = _as_nonempty_1d(truth, "truth")
-    coverage_values: dict[float, float] = {}
-    width_values: dict[float, float] = {}
+    coverage_values: Dict[float, float] = {}
+    width_values: Dict[float, float] = {}
     for coverage in np.asarray(coverages, dtype=np.float64):
         lo = float(np.quantile(pred, (1.0 - coverage) / 2.0, method="linear"))
         hi = float(np.quantile(pred, (1.0 + coverage) / 2.0, method="linear"))
@@ -137,16 +138,16 @@ def central_interval_coverage_width_1d(
     return coverage_values, width_values
 
 
-def pit_histogram_1d(predicted: np.ndarray, truth: np.ndarray, bins: int = 10) -> np.ndarray:
+def pit_histogram_1d(predicted: NDArray, truth: NDArray, bins: int = 10) -> NDArray:
     values = empirical_cdf_values_1d(predicted, truth)
     counts, _ = np.histogram(values, bins=np.linspace(0.0, 1.0, bins + 1))
     return counts.astype(np.float64) / max(values.size, 1)
 
 
 def continuous_conditional_w1_grid(
-    w_grid: np.ndarray,
-    true_sampler: Callable[[np.ndarray, int], np.ndarray],
-    learned_sampler: Callable[[np.ndarray, int], np.ndarray],
+    w_grid: NDArray,
+    true_sampler: Callable[[NDArray, int], NDArray],
+    learned_sampler: Callable[[NDArray, int], NDArray],
     n_per_w: int,
 ) -> float:
     total = 0.0

@@ -8,15 +8,16 @@ import json
 from pathlib import Path
 import shutil
 import sys
-from typing import Callable
+from typing import Callable, Dict, List, Optional, Tuple
 
 import matplotlib
 import numpy as np
+from numpy.typing import NDArray
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
 import torch
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib import font_manager
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -145,9 +146,8 @@ def _run_parallel_repetitions(worker, tasks: list[tuple], parallel: int) -> list
 
 def save_grouped_bar_plot(
     output_path: Path,
-    labels: list[str],
-    series: list[tuple[str, np.ndarray, str]],
-    title: str,
+    labels: List[str],
+    series: List[Tuple[str, NDArray, str]],
     ylabel: str,
     rotation: int = 25,
 ) -> None:
@@ -168,7 +168,7 @@ def save_grouped_bar_plot(
 
 
 def place_legend_outside(**kwargs) -> None:
-    handles, labels = plt.gca().get_legend_handles_labels()
+    handles, _ = plt.gca().get_legend_handles_labels()
     if not handles:
         return
     ncol = kwargs.pop("ncol", max(1, int(np.ceil(len(handles) / 2.0))))
@@ -186,12 +186,11 @@ def place_legend_outside(**kwargs) -> None:
 
 def save_metric_bar_plot(
     output_prefix: Path,
-    labels: list[str],
-    values: list[float],
-    errors: list[float],
-    colors: list[str],
+    labels: List[str],
+    values: List[float],
+    errors: List[float],
+    colors: List[str],
     *,
-    title: str,
     ylabel: str,
     rotation: int = 25,
 ) -> None:
@@ -221,13 +220,13 @@ def _pit_key(idx: int) -> str:
     return f"pit_bin_{idx:02d}"
 
 
-def _summary_mean(row: dict[str, float], metric: str) -> float:
+def _summary_mean(row: Dict[str, float], metric: str) -> float:
     if metric in row:
         return float(row[metric])
     return float(row.get(f"{metric}_mean", np.nan))
 
 
-def _summary_se(row: dict[str, float], metric: str) -> float:
+def _summary_se(row: Dict[str, float], metric: str) -> float:
     return float(row.get(f"{metric}_se", 0.0))
 
 
@@ -247,9 +246,9 @@ def _format_table_value(value: float, se: float) -> str:
 def _write_additional_metric_table(
     output_dir: Path,
     prefix: str,
-    summary: dict[str, dict[str, float]],
-    methods: list[str],
-    metrics: list[tuple[str, str, str]],
+    summary: Dict[str, Dict[str, float]],
+    methods: List[str],
+    metrics: List[Tuple[str, str, str]],
 ) -> None:
     methods = [method for method in methods if method in summary]
     if not methods:
@@ -291,9 +290,9 @@ def _write_additional_metric_table(
 
 def save_metric_grid_bar_plot(
     output_prefix: Path,
-    summary: dict[str, dict[str, float]],
-    methods: list[str],
-    metrics: list[tuple[str, str]],
+    summary: Dict[str, Dict[str, float]],
+    methods: List[str],
+    metrics: List[Tuple[str, str]],
     *,
     rotation: int = 25,
 ) -> None:
@@ -321,7 +320,7 @@ def save_metric_grid_bar_plot(
         ax.set_xticks(x_axis)
         ax.set_xticklabels(labels, rotation=rotation, ha="right" if rotation else "center")
         ax.set_ylim(bottom=0.0)
-    for ax in axes.ravel()[len(metrics) :]:
+    for ax in axes.ravel()[len(metrics):]:
         ax.axis("off")
     plt.tight_layout()
     plt.savefig(output_prefix.with_suffix(".png"), dpi=260)
@@ -331,8 +330,8 @@ def save_metric_grid_bar_plot(
 
 def save_interval_width_plot(
     output_prefix: Path,
-    summary: dict[str, dict[str, float]],
-    methods: list[str],
+    summary: Dict[str, Dict[str, float]],
+    methods: List[str],
     *,
     ylabel: str,
 ) -> None:
@@ -367,8 +366,8 @@ def save_interval_width_plot(
 
 def save_pit_histogram_plot(
     output_prefix: Path,
-    summary: dict[str, dict[str, float]],
-    methods: list[str],
+    summary: Dict[str, Dict[str, float]],
+    methods: List[str],
 ) -> None:
     methods = [method for method in methods if method in summary]
     if not methods:
@@ -396,7 +395,7 @@ def save_pit_histogram_plot(
         ax.set_xlabel("PIT")
     for ax in axes[:, 0]:
         ax.set_ylabel("frequency")
-    for ax in axes.ravel()[len(methods) :]:
+    for ax in axes.ravel()[len(methods):]:
         ax.axis("off")
     plt.tight_layout()
     plt.savefig(output_prefix.with_suffix(".png"), dpi=260)
@@ -407,12 +406,12 @@ def save_pit_histogram_plot(
 def fit_ganice(
     *,
     d_w: int,
-    train_w: np.ndarray,
-    train_y: np.ndarray,
+    train_w: NDArray,
+    train_y: NDArray,
     target_w_sampler,
     config: GANICEConfig,
     seed: int,
-    d_cell_w: int | None = None,
+    d_cell_w: Optional[int] = None,
     cell_transform=None,
 ) -> GANICE:
     model = GANICE(
@@ -427,10 +426,10 @@ def fit_ganice(
 
 
 def fit_pca_treatment_cell_transform(
-    x_reference: np.ndarray,
+    x_reference: NDArray,
     *,
     n_components: int,
-    treatment_scale: tuple[float, float] = (0.0, 1.0),
+    treatment_scale: Tuple[float, float] = (0.0, 1.0),
 ):
     """Build a low-dimensional [0,1] cell map for finite-resolution critics."""
 
@@ -446,7 +445,7 @@ def fit_pca_treatment_cell_transform(
     t_lo, t_hi = treatment_scale
     t_scale = max(t_hi - t_lo, 1e-6)
 
-    def transform(w: np.ndarray) -> np.ndarray:
+    def transform(w: NDArray) -> NDArray:
         w_arr = np.asarray(w, dtype=np.float64)
         if w_arr.ndim == 1:
             w_arr = w_arr[None, :]
@@ -460,14 +459,14 @@ def fit_pca_treatment_cell_transform(
     return transform
 
 
-def fit_jobs_cell_transform(x_reference: np.ndarray):
+def fit_jobs_cell_transform(x_reference: NDArray):
     x_ref = np.asarray(x_reference, dtype=np.float64)
     re75 = x_ref[:, 6]
     re75_lo = float(np.quantile(re75, 0.02))
     re75_hi = float(np.quantile(re75, 0.98))
     re75_scale = max(re75_hi - re75_lo, 1e-6)
 
-    def transform(w: np.ndarray) -> np.ndarray:
+    def transform(w: NDArray) -> NDArray:
         w_arr = np.asarray(w, dtype=np.float64)
         if w_arr.ndim == 1:
             w_arr = w_arr[None, :]
@@ -579,14 +578,16 @@ def ihdp_ganice_config(
     quick: bool,
     cell_normalized: bool = True,
     pooled: bool = False,
-    cell_resolution: tuple[int, ...] | None = None,
+    cell_resolution: Optional[Tuple[int, ...]] = None,
     min_cell_samples: int = 8,
     shared_generator: bool = True,
-    factual_crps_weight: float | None = None,
-    factual_mse_weight: float | None = None,
-    generator_transport_weight: float | None = None,
+    factual_crps_weight: Optional[float] = None,
+    factual_mse_weight: Optional[float] = None,
+    generator_transport_weight: Optional[float] = None,
 ) -> GANICEConfig:
-    resolution = (0,) * (x_dim + 1) if pooled else (cell_resolution if cell_resolution is not None else (0,) * x_dim + (1,))
+    resolution = (0,) * (x_dim + 1) if pooled else (
+        cell_resolution if cell_resolution is not None else (0,) * x_dim + (1,)
+    )
     return GANICEConfig(
         latent_dim=4,
         hidden_dims_generator=(64, 64) if quick else (128, 128),
@@ -606,7 +607,9 @@ def ihdp_ganice_config(
         factual_crps_samples=6,
         factual_mse_weight=(2.0 if factual_mse_weight is None else factual_mse_weight) if not pooled else 0.0,
         factual_mse_samples=6,
-        generator_transport_weight=(0.75 if generator_transport_weight is None else generator_transport_weight) if not pooled else 3.0,
+        generator_transport_weight=(
+            0.75 if generator_transport_weight is None else generator_transport_weight
+        ) if not pooled else 3.0,
         residual_quantile_calibration=not pooled,
         calibration_samples_per_observation=8 if quick else 12,
         calibration_grid_size=192 if quick else 256,
@@ -620,7 +623,9 @@ def ihdp_ganice_config(
     )
 
 
-def ihdp_ganite_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool) -> GANITEConfig:
+def ihdp_ganite_config(
+    seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool
+) -> GANITEConfig:
     return GANITEConfig(
         x_dim=x_dim,
         hidden_dim=64 if quick else 96,
@@ -636,7 +641,9 @@ def ihdp_ganite_config(seed: int, x_dim: int, outcome_lower: float, outcome_uppe
     )
 
 
-def ihdp_po_flow_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool) -> POFlowConfig:
+def ihdp_po_flow_config(
+    seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool
+) -> POFlowConfig:
     return POFlowConfig(
         x_dim=x_dim,
         num_treatments=2,
@@ -651,7 +658,9 @@ def ihdp_po_flow_config(seed: int, x_dim: int, outcome_lower: float, outcome_upp
     )
 
 
-def ihdp_diff_po_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool) -> DiffPOConfig:
+def ihdp_diff_po_config(
+    seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool
+) -> DiffPOConfig:
     return DiffPOConfig(
         x_dim=x_dim,
         num_treatments=2,
@@ -709,17 +718,17 @@ def ihdp_dr_learner_config(seed: int, x_dim: int, outcome_lower: float, outcome_
     )
 
 
-Sampler = Callable[[np.ndarray, int, int, int | None], np.ndarray]
+Sampler = Callable[[NDArray, int, int, Optional[int]], NDArray]
 
 
 def make_ganice_binary_sampler(model: GANICE, dgp: IHDPDistDGP) -> Sampler:
-    def sampler(x: np.ndarray, treatment: int, n_per_x: int, seed: int | None) -> np.ndarray:
+    def sampler(x: NDArray, treatment: int, n_per_x: int, seed: Optional[int]) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[None, :]
         samples = []
         for row_idx in range(x_arr.shape[0]):
-            w = dgp.encode_w(x_arr[row_idx : row_idx + 1], treatment)
+            w = dgp.encode_w(x_arr[row_idx: row_idx + 1], treatment)
             samples.append(
                 model.sample_conditional(
                     w,
@@ -733,21 +742,21 @@ def make_ganice_binary_sampler(model: GANICE, dgp: IHDPDistDGP) -> Sampler:
 
 
 def make_residual_plugin_sampler(
-    predict_potential_outcomes: Callable[[np.ndarray], np.ndarray],
-    x_train: np.ndarray,
-    treatment_train: np.ndarray,
-    y_train: np.ndarray,
+    predict_potential_outcomes: Callable[[NDArray], NDArray],
+    x_train: NDArray,
+    treatment_train: NDArray,
+    y_train: NDArray,
     outcome_lower: float,
     outcome_upper: float,
 ) -> Sampler:
     train_mu = predict_potential_outcomes(x_train).astype(np.float64)
-    residuals: dict[int, np.ndarray] = {}
+    residuals: Dict[int, NDArray] = {}
     pooled = y_train.reshape(-1).astype(np.float64) - train_mu[np.arange(x_train.shape[0]), treatment_train]
     for treatment in (0, 1):
         mask = treatment_train == treatment
         residuals[treatment] = pooled[mask] if np.any(mask) else pooled
 
-    def sampler(x: np.ndarray, treatment: int, n_per_x: int, seed: int | None) -> np.ndarray:
+    def sampler(x: NDArray, treatment: int, n_per_x: int, seed: Optional[int]) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[None, :]
@@ -763,11 +772,11 @@ def make_residual_plugin_sampler(
 
 
 def make_degenerate_mean_sampler(
-    predict_potential_outcomes: Callable[[np.ndarray], np.ndarray],
+    predict_potential_outcomes: Callable[[NDArray], NDArray],
     outcome_lower: float,
     outcome_upper: float,
 ) -> Sampler:
-    def sampler(x: np.ndarray, treatment: int, n_per_x: int, seed: int | None) -> np.ndarray:
+    def sampler(x: NDArray, treatment: int, n_per_x: int, seed: Optional[int]) -> NDArray:
         del seed
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
@@ -781,7 +790,7 @@ def make_degenerate_mean_sampler(
 
 def estimate_binary_means_from_sampler(
     sampler: Sampler,
-    x: np.ndarray,
+    x: NDArray,
     n_mc: int,
     seed: int,
 ) -> np.ndarray:
@@ -795,14 +804,14 @@ def estimate_binary_means_from_sampler(
 def ihdp_extended_w1(
     dgp: IHDPDistDGP,
     sampler: Sampler,
-    x_eval: np.ndarray,
+    x_eval: NDArray,
     n_per_state: int,
     seed: int,
 ) -> float:
     total = 0.0
     count = 0
     for row_idx in range(x_eval.shape[0]):
-        x_row = x_eval[row_idx : row_idx + 1]
+        x_row = x_eval[row_idx: row_idx + 1]
         for treatment in (0, 1):
             state_seed = seed + 1000 * row_idx + 37 * treatment
             y_true = dgp.sample_potential(x_row, treatment, n_per_x=n_per_state, seed=state_seed)[0]
@@ -812,7 +821,7 @@ def ihdp_extended_w1(
     return float(total / count)
 
 
-def _empty_distribution_accumulators() -> dict[str, object]:
+def _empty_distribution_accumulators() -> Dict[str, object]:
     return {
         "state_count": 0,
         "extended_w1": 0.0,
@@ -829,7 +838,7 @@ def _empty_distribution_accumulators() -> dict[str, object]:
     }
 
 
-def _accumulate_distribution_state(acc: dict[str, object], predicted: np.ndarray, truth: np.ndarray) -> None:
+def _accumulate_distribution_state(acc: Dict[str, object], predicted: NDArray, truth: NDArray) -> None:
     predicted_1d = np.asarray(predicted, dtype=np.float64).reshape(-1)
     truth_1d = np.asarray(truth, dtype=np.float64).reshape(-1)
     acc["extended_w1"] = float(acc["extended_w1"]) + sample_wasserstein_1_1d(truth_1d, predicted_1d)
@@ -860,7 +869,7 @@ def _accumulate_distribution_state(acc: dict[str, object], predicted: np.ndarray
     acc["state_count"] = int(acc["state_count"]) + 1
 
 
-def _finalize_distribution_accumulators(acc: dict[str, object]) -> dict[str, float]:
+def _finalize_distribution_accumulators(acc: Dict[str, object]) -> Dict[str, float]:
     count = int(acc["state_count"])
     if count <= 0:
         return {}
@@ -899,15 +908,15 @@ def _finalize_distribution_accumulators(acc: dict[str, object]) -> dict[str, flo
 def ihdp_distribution_metrics(
     dgp: IHDPDistDGP,
     sampler: Sampler,
-    x_eval: np.ndarray,
+    x_eval: NDArray,
     n_per_state: int,
     seed: int,
-) -> dict[str, float]:
+) -> Dict[str, float]:
     acc = _empty_distribution_accumulators()
     true_quantiles = np.zeros((x_eval.shape[0], 2, ADDITIONAL_QUANTILES.size), dtype=np.float64)
     pred_quantiles = np.zeros_like(true_quantiles)
     for row_idx in range(x_eval.shape[0]):
-        x_row = x_eval[row_idx : row_idx + 1]
+        x_row = x_eval[row_idx: row_idx + 1]
         for treatment in (0, 1):
             state_seed = seed + 1000 * row_idx + 37 * treatment
             y_true = dgp.sample_potential(x_row, treatment, n_per_x=n_per_state, seed=state_seed)[0]
@@ -932,11 +941,11 @@ def ihdp_distribution_metrics(
 def ihdp_qte_curve(
     dgp: IHDPDistDGP,
     sampler: Sampler,
-    x_eval: np.ndarray,
-    quantiles: np.ndarray,
+    x_eval: NDArray,
+    quantiles: NDArray,
     n_mc: int,
     seed: int,
-) -> np.ndarray:
+) -> NDArray:
     treated = sampler(x_eval, 1, n_mc, seed + 1).reshape(x_eval.shape[0], n_mc)
     control = sampler(x_eval, 0, n_mc, seed + 2).reshape(x_eval.shape[0], n_mc)
     q1 = np.quantile(treated, quantiles, axis=1, method="linear")
@@ -946,11 +955,11 @@ def ihdp_qte_curve(
 
 def ihdp_true_qte_curve(
     dgp: IHDPDistDGP,
-    x_eval: np.ndarray,
-    quantiles: np.ndarray,
+    x_eval: NDArray,
+    quantiles: NDArray,
     n_mc: int,
     seed: int,
-) -> np.ndarray:
+) -> NDArray:
     y1 = dgp.sample_potential(x_eval, 1, n_per_x=n_mc, seed=seed + 1).reshape(x_eval.shape[0], n_mc)
     y0 = dgp.sample_potential(x_eval, 0, n_per_x=n_mc, seed=seed + 2).reshape(x_eval.shape[0], n_mc)
     q1 = np.quantile(y1, quantiles, axis=1, method="linear")
@@ -958,9 +967,9 @@ def ihdp_true_qte_curve(
     return (q1 - q0).mean(axis=1).astype(np.float64)
 
 
-def summarize_metric_repetitions(repetitions: list[dict[str, dict[str, float]]]) -> dict[str, dict[str, float]]:
+def summarize_metric_repetitions(repetitions: List[Dict[str, Dict[str, float]]]) -> Dict[str, Dict[str, float]]:
     methods = sorted({method for result in repetitions for method in result})
-    summary: dict[str, dict[str, float]] = {}
+    summary: Dict[str, Dict[str, float]] = {}
     for method in methods:
         metric_names = sorted({metric for result in repetitions if method in result for metric in result[method]})
         summary[method] = {}
@@ -974,7 +983,7 @@ def summarize_metric_repetitions(repetitions: list[dict[str, dict[str, float]]])
     return summary
 
 
-def write_ihdp_tables(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
+def write_ihdp_tables(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
     ordered_methods = ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]
     best_ew = min(ordered_methods, key=lambda method: summary[method]["extended_w1"])
     best_pehe = min(ordered_methods, key=lambda method: summary[method]["sqrt_pehe"])
@@ -1017,8 +1026,10 @@ def write_ihdp_tables(output_dir: Path, summary: dict[str, dict[str, float]]) ->
     (output_dir / "ihdp_dist_table.tex").write_text("\n".join(tex_lines) + "\n", encoding="utf-8")
 
 
-def write_ihdp_metric_bar_outputs(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
-    methods = [method for method in ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"] if method in summary]
+def write_ihdp_metric_bar_outputs(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
+    methods = [
+        method for method in ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"] if method in summary
+    ]
     if not methods:
         return
     save_metric_bar_plot(
@@ -1041,7 +1052,7 @@ def write_ihdp_metric_bar_outputs(output_dir: Path, summary: dict[str, dict[str,
     )
 
 
-def write_ihdp_qte_error_outputs(output_dir: Path, qte_repetitions: list[dict[str, object]]) -> None:
+def write_ihdp_qte_error_outputs(output_dir: Path, qte_repetitions: List[Dict[str, object]]) -> None:
     if not qte_repetitions:
         return
     quantiles = np.asarray(qte_repetitions[0]["quantiles"], dtype=np.float64)
@@ -1090,8 +1101,10 @@ def write_ihdp_qte_error_outputs(output_dir: Path, qte_repetitions: list[dict[st
     (output_dir / "ihdp_qte_error.csv").write_text("\n".join(csv_lines) + "\n", encoding="utf-8")
 
 
-def write_ihdp_ablation_output(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
-    ablation_methods = [method for method in ["ganice", "ganice_no_cell_norm", "ganice_pooled", "ganite"] if method in summary]
+def write_ihdp_ablation_output(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
+    ablation_methods = [
+        method for method in ["ganice", "ganice_no_cell_norm", "ganice_pooled", "ganite"] if method in summary
+    ]
     if not ablation_methods:
         return
     plt.figure(figsize=(10.2, 6.1))
@@ -1115,7 +1128,7 @@ def write_ihdp_ablation_output(output_dir: Path, summary: dict[str, dict[str, fl
     plt.close()
 
 
-def write_ihdp_additional_outputs(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
+def write_ihdp_additional_outputs(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
     metrics = [
         ("crps", "CRPS", "min"),
         ("energy_distance", "ED", "min"),
@@ -1153,7 +1166,9 @@ def write_ihdp_additional_outputs(output_dir: Path, summary: dict[str, dict[str,
     )
 
 
-def run_single_ihdp_dist(output_dir: Path, seed: int, quick: bool) -> tuple[dict[str, dict[str, float]], dict[str, object]]:
+def run_single_ihdp_dist(
+    output_dir: Path, seed: int, quick: bool
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, object]]:
     dgp = IHDPDistDGP(seed=seed + 1, split_seed=seed + 2)
     train = dgp.observed_split("train", seed=seed + 3)
     validation_x, _ = dgp.split("validation")
@@ -1197,7 +1212,7 @@ def run_single_ihdp_dist(output_dir: Path, seed: int, quick: bool) -> tuple[dict
     ganice_cell_transform = fit_pca_treatment_cell_transform(train["x"], n_components=2)
     ganice_cell_resolution = (1, 1, 1)
     ganice_cell_dim = 3
-    ganice_candidates: list[tuple[float, GANICE]] = []
+    ganice_candidates: List[Tuple[float, GANICE]] = []
     restart_count = 2 if quick else 4
     validation_mc = 64 if quick else 96
     ganice_candidate_specs = [
@@ -1274,7 +1289,7 @@ def run_single_ihdp_dist(output_dir: Path, seed: int, quick: bool) -> tuple[dict
         seed=seed + 61,
     )
 
-    samplers: dict[str, Sampler] = {
+    samplers: Dict[str, Sampler] = {
         "ganite": ganite_sampler,
         "po_flow": lambda x, treatment, n, sample_seed: po_flow.sample_potential(
             x,
@@ -1300,7 +1315,7 @@ def run_single_ihdp_dist(output_dir: Path, seed: int, quick: bool) -> tuple[dict
         "ganice_pooled": make_ganice_binary_sampler(ganice_pooled, dgp),
     }
 
-    results: dict[str, dict[str, float]] = {}
+    results: Dict[str, Dict[str, float]] = {}
     for method, sampler in samplers.items():
         pred_mu = estimate_binary_means_from_sampler(sampler, test_x, mean_mc, seed + 10_000)
         pred_tau = pred_mu[:, 1] - pred_mu[:, 0]
@@ -1525,17 +1540,17 @@ def jobs_dr_learner_config(seed: int, x_dim: int, outcome_lower: float, outcome_
 def make_ganice_jobs_sampler(
     model: GANICE,
     data: JobsLaLondeData,
-    zero_masses: dict[int, float] | None = None,
-    arm_quantile_calibrators: dict[int, tuple[np.ndarray, np.ndarray]] | None = None,
+    zero_masses: Optional[Dict[int, float]] = None,
+    arm_quantile_calibrators: Optional[Dict[int, Tuple[NDArray, NDArray]]] = None,
 ) -> Sampler:
-    def sampler(x: np.ndarray, treatment: int, n_per_x: int, seed: int | None) -> np.ndarray:
+    def sampler(x: NDArray, treatment: int, n_per_x: int, seed: Optional[int]) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[None, :]
         rng = np.random.default_rng(seed)
         samples = []
         for row_idx in range(x_arr.shape[0]):
-            w = data.encode_w(x_arr[row_idx : row_idx + 1], treatment)
+            w = data.encode_w(x_arr[row_idx: row_idx + 1], treatment)
             row_samples = model.sample_conditional(
                 w,
                 n_per_x,
@@ -1562,13 +1577,13 @@ def make_ganice_jobs_sampler(
 
 def fit_jobs_arm_quantile_calibrators(
     sampler: Sampler,
-    rct: dict[str, np.ndarray],
+    rct: Dict[str, NDArray],
     *,
     n_per_x: int,
     seed: int,
     grid_size: int = 256,
-) -> dict[int, tuple[np.ndarray, np.ndarray]]:
-    calibrators: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+) -> Dict[int, Tuple[NDArray, NDArray]]:
+    calibrators: Dict[int, Tuple[NDArray, NDArray]] = {}
     probs = (np.arange(grid_size, dtype=np.float64) + 0.5) / grid_size
     for arm in (0, 1):
         generated = jobs_arm_samples(sampler, rct["x"], arm, n_per_x, seed + 10_000 * arm)
@@ -1583,7 +1598,7 @@ def fit_jobs_arm_quantile_calibrators(
     return calibrators
 
 
-def jobs_nsw_zero_masses(data: JobsLaLondeData, split: str = "train") -> dict[int, float]:
+def jobs_nsw_zero_masses(data: JobsLaLondeData, split: str = "train") -> Dict[int, float]:
     rct = data.rct_split(split)
     return {
         arm: float(np.mean(rct["y_earnings"][rct["t"] == arm] <= 0.0))
@@ -1593,20 +1608,20 @@ def jobs_nsw_zero_masses(data: JobsLaLondeData, split: str = "train") -> dict[in
 
 def jobs_arm_samples(
     sampler: Sampler,
-    x_rct: np.ndarray,
+    x_rct: NDArray,
     treatment: int,
     n_per_x: int,
     seed: int,
-) -> np.ndarray:
+) -> NDArray:
     return sampler(x_rct, treatment, n_per_x, seed + 100 * treatment).reshape(-1)
 
 
 def jobs_estimate_earnings_means(
     sampler: Sampler,
-    x_rct: np.ndarray,
+    x_rct: NDArray,
     n_mc: int,
     seed: int,
-) -> np.ndarray:
+) -> NDArray:
     means = []
     for treatment in (0, 1):
         transformed = sampler(x_rct, treatment, n_mc, seed + treatment).reshape(x_rct.shape[0], n_mc)
@@ -1617,11 +1632,11 @@ def jobs_estimate_earnings_means(
 
 def jobs_additional_metrics(
     sampler: Sampler,
-    rct: dict[str, np.ndarray],
-    arm_samples_earnings: dict[int, np.ndarray],
+    rct: Dict[str, NDArray],
+    arm_samples_earnings: Dict[int, NDArray],
     n_per_x: int,
     seed: int,
-) -> dict[str, float]:
+) -> Dict[str, float]:
     treatment = np.asarray(rct["t"], dtype=np.int64).reshape(-1)
     true_y = np.asarray(rct["y"], dtype=np.float64).reshape(-1)
     true_earnings = np.asarray(rct["y_earnings"], dtype=np.float64).reshape(-1)
@@ -2048,12 +2063,19 @@ def write_jobs_cdf_outputs(output_dir: Path, rct: dict[str, np.ndarray], cdf_det
         plt.close()
 
 
-def write_jobs_policy_curve_output(output_dir: Path, rates: np.ndarray, curves: dict[str, np.ndarray]) -> None:
+def write_jobs_policy_curve_output(output_dir: Path, rates: NDArray, curves: Dict[str, NDArray]) -> None:
     plt.figure(figsize=(10.6, 6.2))
     for method in ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]:
         linewidth = 3.0 if method == "ganice" else 2.0
         linestyle = "-" if method == "ganice" else "--"
-        plt.plot(rates, curves[method] / 1000.0, label=LABELS[method], color=COLORS[method], linewidth=linewidth, linestyle=linestyle)
+        plt.plot(
+            rates,
+            curves[method] / 1000.0,
+            label=LABELS[method],
+            color=COLORS[method],
+            linewidth=linewidth,
+            linestyle=linestyle,
+        )
     plt.xlabel("treatment inclusion rate")
     plt.ylabel("RCT policy value (thousand USD)")
     place_legend_outside()
@@ -2064,11 +2086,10 @@ def write_jobs_policy_curve_output(output_dir: Path, rates: np.ndarray, curves: 
 
 
 def run_single_jobs_lalonde(
-    output_dir: Path,
     seed: int,
     quick: bool,
     include_nsw_control_in_observed: bool,
-) -> tuple[dict[str, dict[str, float]], dict[str, object]]:
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, object]]:
     data = JobsLaLondeData(
         split_seed=seed + 1,
         include_nsw_control_in_observed=include_nsw_control_in_observed,
@@ -2111,7 +2132,7 @@ def run_single_jobs_lalonde(
     ganice_zero_masses = jobs_nsw_zero_masses(data, "train")
     ganice_cell_transform = fit_jobs_cell_transform(train["x"])
     ganice_cell_dim = 3
-    ganice_candidates: list[tuple[float, GANICE, dict[str, float | int]]] = []
+    ganice_candidates: List[Tuple[float, GANICE, Dict[str, float | int]]] = []
     base_ganice_config = jobs_ganice_config(
         seed + 101,
         data.feature_dim,
@@ -2120,7 +2141,7 @@ def run_single_jobs_lalonde(
         quick=quick,
     )
     if quick:
-        ganice_candidate_specs: list[dict[str, float | int]] = [
+        ganice_candidate_specs: List[Dict[str, float | int]] = [
             {"num_steps": 120, "generator_transport_weight": 4.0, "factual_crps_weight": 4.0},
             {"num_steps": 160, "generator_transport_weight": 6.0, "factual_crps_weight": 5.0},
             {"num_steps": 180, "generator_transport_weight": 4.0, "factual_crps_weight": 4.0},
@@ -2168,7 +2189,7 @@ def run_single_jobs_lalonde(
         seed=seed + 55_000,
     )
 
-    samplers: dict[str, Sampler] = {
+    samplers: Dict[str, Sampler] = {
         "ganite": ganite_sampler,
         "po_flow": lambda x, treatment, n, sample_seed: po_flow.sample_potential(
             x,
@@ -2198,9 +2219,9 @@ def run_single_jobs_lalonde(
     }
 
     true_att = data.rct_att_earnings("test")
-    results: dict[str, dict[str, float]] = {}
-    details: dict[str, dict[str, object]] = {}
-    policy_curves: dict[str, np.ndarray] = {}
+    results: Dict[str, Dict[str, float]] = {}
+    details: Dict[str, Dict[str, object]] = {}
+    policy_curves: Dict[str, NDArray] = {}
     rates = np.linspace(0.0, 1.0, 21, dtype=np.float64)
     for method, sampler in samplers.items():
         method_metrics, method_detail = jobs_evaluate_sampler(
@@ -2240,7 +2261,9 @@ def run_single_jobs_lalonde(
     }
 
 
-def _run_jobs_repetition(task: tuple[Path, int, int, bool, bool]) -> tuple[dict[str, dict[str, float]], dict[str, object]]:
+def _run_jobs_repetition(
+    task: Tuple[Path, int, int, bool, bool]
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, object]]:
     output_dir, seed, rep, quick, include_nsw_control_in_observed = task
     rep_dir = ensure_dir(output_dir / "replications" / f"jobs_rep_{rep:03d}")
     return run_single_jobs_lalonde(
@@ -2258,11 +2281,11 @@ def run_jobs_lalonde_benchmark(
     quick: bool,
     include_nsw_control_in_observed: bool,
     parallel: int = 1,
-) -> dict[str, dict[str, float]]:
+) -> Dict[str, Dict[str, float]]:
     tasks = [(output_dir, seed, rep, quick, include_nsw_control_in_observed) for rep in range(repetitions)]
     rep_outputs = _run_parallel_repetitions(_run_jobs_repetition, tasks, parallel)
     per_repetition = [result for result, _ in rep_outputs]
-    last_details: dict[str, object] | None = rep_outputs[-1][1] if rep_outputs else None
+    last_details: Dict[str, object] | None = rep_outputs[-1][1] if rep_outputs else None
     summary = summarize_jobs_repetitions(per_repetition)
     write_jobs_tables(output_dir, summary)
     write_jobs_metric_bar_outputs(output_dir, summary)
@@ -2297,7 +2320,7 @@ def run_jobs_lalonde_benchmark(
     return summary
 
 
-def vcnet_features(x: np.ndarray, treatment: np.ndarray | int, num_treatments: int) -> np.ndarray:
+def vcnet_features(x: NDArray, treatment: NDArray | int, num_treatments: int) -> NDArray:
     x_arr = np.asarray(x, dtype=np.float32)
     treatment_arr = np.asarray(treatment, dtype=np.int64).reshape(-1)
     if treatment_arr.size == 1 and x_arr.shape[0] > 1:
@@ -2306,7 +2329,7 @@ def vcnet_features(x: np.ndarray, treatment: np.ndarray | int, num_treatments: i
     return np.column_stack([x_arr, one_hot]).astype(np.float32)
 
 
-def predict_scigan_factual(model: SCIGAN, x: np.ndarray, treatment: np.ndarray, dosage: np.ndarray) -> np.ndarray:
+def predict_scigan_factual(model: SCIGAN, x: NDArray, treatment: NDArray, dosage: NDArray) -> NDArray:
     pred = np.empty((x.shape[0], 1), dtype=np.float32)
     for treatment_value in np.unique(treatment).astype(np.int64):
         mask = treatment == int(treatment_value)
@@ -2315,13 +2338,13 @@ def predict_scigan_factual(model: SCIGAN, x: np.ndarray, treatment: np.ndarray, 
 
 
 def residual_pools_by_treatment_dose(
-    treatment: np.ndarray,
-    dosage: np.ndarray,
-    residuals: np.ndarray,
+    treatment: NDArray,
+    dosage: NDArray,
+    residuals: NDArray,
     *,
     num_treatments: int,
     num_strata: int = 5,
-) -> dict[tuple[int, int], np.ndarray]:
+) -> Dict[Tuple[int, int], NDArray]:
     treatment_arr = np.asarray(treatment, dtype=np.int64).reshape(-1)
     dosage_arr = np.asarray(dosage, dtype=np.float32).reshape(-1)
     residual_arr = np.asarray(residuals, dtype=np.float32).reshape(-1)
@@ -2342,14 +2365,14 @@ def residual_pools_by_treatment_dose(
 
 def sample_residual_plugin(
     mean: float,
-    pools: dict[tuple[int, int], np.ndarray],
+    pools: Dict[Tuple[int, int], NDArray],
     treatment: int,
     dosage: float,
     n: int,
     seed: int,
     *,
     num_strata: int = 5,
-) -> np.ndarray:
+) -> NDArray:
     rng = np.random.default_rng(seed)
     stratum = int(np.floor(np.clip(dosage, 0.0, np.nextafter(1.0, 0.0)) * num_strata))
     pool = pools.get((int(treatment), stratum), pools[(-1, -1)])
@@ -2357,7 +2380,7 @@ def sample_residual_plugin(
     return (float(mean) + residual).reshape(-1, 1).astype(np.float32)
 
 
-def build_tcga_true_grid(dgp: TCGADoseDGP, z_test: np.ndarray, dosage_grid: np.ndarray) -> np.ndarray:
+def build_tcga_true_grid(dgp: TCGADoseDGP, z_test: NDArray, dosage_grid: NDArray) -> NDArray:
     grid = np.zeros((z_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         for idx_d, dosage in enumerate(dosage_grid):
@@ -2365,7 +2388,7 @@ def build_tcga_true_grid(dgp: TCGADoseDGP, z_test: np.ndarray, dosage_grid: np.n
     return grid
 
 
-def build_tcga_scigan_grid(model: SCIGAN, dgp: TCGADoseDGP, x_test: np.ndarray, dosage_grid: np.ndarray) -> np.ndarray:
+def build_tcga_scigan_grid(model: SCIGAN, dgp: TCGADoseDGP, x_test: NDArray, dosage_grid: NDArray) -> NDArray:
     grid = np.zeros((x_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         for idx_d, dosage in enumerate(dosage_grid):
@@ -2377,7 +2400,7 @@ def build_tcga_scigan_grid(model: SCIGAN, dgp: TCGADoseDGP, x_test: np.ndarray, 
     return grid
 
 
-def build_tcga_vcnet_grid(model: VCNet, dgp: TCGADoseDGP, x_test: np.ndarray, dosage_grid: np.ndarray) -> np.ndarray:
+def build_tcga_vcnet_grid(model: VCNet, dgp: TCGADoseDGP, x_test: NDArray, dosage_grid: NDArray) -> NDArray:
     grid = np.zeros((x_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         features = vcnet_features(x_test, treatment, dgp.num_treatments)
@@ -2389,7 +2412,7 @@ def build_tcga_vcnet_grid(model: VCNet, dgp: TCGADoseDGP, x_test: np.ndarray, do
     return grid
 
 
-def build_tcga_drnet_grid(model: DRNet, dgp: TCGADoseDGP, x_test: np.ndarray, dosage_grid: np.ndarray) -> np.ndarray:
+def build_tcga_drnet_grid(model: DRNet, dgp: TCGADoseDGP, x_test: NDArray, dosage_grid: NDArray) -> NDArray:
     grid = np.zeros((x_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         for idx_d, dosage in enumerate(dosage_grid):
@@ -2401,7 +2424,7 @@ def build_tcga_drnet_grid(model: DRNet, dgp: TCGADoseDGP, x_test: np.ndarray, do
     return grid
 
 
-def build_tcga_ganice_grid(model: GANICE, dgp: TCGADoseDGP, x_test: np.ndarray, dosage_grid: np.ndarray, n_mc: int) -> np.ndarray:
+def build_tcga_ganice_grid(model: GANICE, dgp: TCGADoseDGP, x_test: NDArray, dosage_grid: NDArray, n_mc: int) -> NDArray:
     grid = np.zeros((x_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         for idx_d, dosage in enumerate(dosage_grid):
@@ -2414,7 +2437,7 @@ def build_tcga_ganice_grid(model: GANICE, dgp: TCGADoseDGP, x_test: np.ndarray, 
     return grid
 
 
-def encode_tcga_ganice_w(dgp: TCGADoseDGP, z: np.ndarray, treatment: np.ndarray | int, dosage: np.ndarray | float) -> np.ndarray:
+def encode_tcga_ganice_w(dgp: TCGADoseDGP, z: NDArray, treatment: NDArray | int, dosage: NDArray | float) -> NDArray:
     z_arr = np.asarray(z, dtype=np.float32)
     if z_arr.ndim == 1:
         z_arr = z_arr[None, :]
@@ -2433,9 +2456,9 @@ def encode_tcga_ganice_w(dgp: TCGADoseDGP, z: np.ndarray, treatment: np.ndarray 
 def sample_tcga_ganice_target_w(
     dgp: TCGADoseDGP,
     n: int,
-    seed: int | None,
+    seed: Optional[int],
     split: str = "test",
-) -> np.ndarray:
+) -> NDArray:
     rng = np.random.default_rng(seed)
     _, z_pool = dgp.split_arrays(split)  # type: ignore[arg-type]
     draw = rng.integers(0, z_pool.shape[0], size=n)
@@ -2447,10 +2470,10 @@ def sample_tcga_ganice_target_w(
 def build_tcga_ganice_grid_from_z(
     model: GANICE,
     dgp: TCGADoseDGP,
-    z_test: np.ndarray,
-    dosage_grid: np.ndarray,
+    z_test: NDArray,
+    dosage_grid: NDArray,
     n_mc: int,
-) -> np.ndarray:
+) -> NDArray:
     grid = np.zeros((z_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         for idx_d, dosage in enumerate(dosage_grid):
@@ -2464,7 +2487,7 @@ def build_tcga_ganice_grid_from_z(
     return grid
 
 
-def tcga_response_metrics_from_grid(true_grid: np.ndarray, pred_grid: np.ndarray) -> dict[str, float]:
+def tcga_response_metrics_from_grid(true_grid: NDArray, pred_grid: NDArray) -> Dict[str, float]:
     mise = float(np.mean((pred_grid - true_grid) ** 2))
     dpe_terms: list[float] = []
     pe_terms: list[float] = []
@@ -2494,9 +2517,9 @@ def tcga_response_metrics_from_grid(true_grid: np.ndarray, pred_grid: np.ndarray
 
 def tcga_extended_w1(
     dgp: TCGADoseDGP,
-    x_eval: np.ndarray,
-    z_eval: np.ndarray,
-    dosage_grid: np.ndarray,
+    x_eval: NDArray,
+    z_eval: NDArray,
+    dosage_grid: NDArray,
     learned_sampler,
     *,
     n_per_state: int,
@@ -2508,7 +2531,7 @@ def tcga_extended_w1(
         for treatment in range(dgp.num_treatments):
             for idx_d, dosage in enumerate(dosage_grid):
                 state_seed = seed + 10_000 * i + 200 * treatment + idx_d
-                z_rep = np.repeat(z_eval[i : i + 1], n_per_state, axis=0)
+                z_rep = np.repeat(z_eval[i: i + 1], n_per_state, axis=0)
                 y_true = dgp.sample_potential(
                     z_rep,
                     np.full(n_per_state, treatment, dtype=np.int64),
@@ -2516,8 +2539,8 @@ def tcga_extended_w1(
                     seed=state_seed,
                 )
                 y_learned = learned_sampler(
-                    x_eval[i : i + 1],
-                    z_eval[i : i + 1],
+                    x_eval[i: i + 1],
+                    z_eval[i: i + 1],
                     treatment,
                     float(dosage),
                     n_per_state,
@@ -2530,20 +2553,20 @@ def tcga_extended_w1(
 
 def tcga_distribution_metrics(
     dgp: TCGADoseDGP,
-    x_eval: np.ndarray,
-    z_eval: np.ndarray,
-    dosage_grid: np.ndarray,
+    x_eval: NDArray,
+    z_eval: NDArray,
+    dosage_grid: NDArray,
     learned_sampler,
     *,
     n_per_state: int,
     seed: int,
-) -> dict[str, float]:
+) -> Dict[str, float]:
     acc = _empty_distribution_accumulators()
     for i in range(x_eval.shape[0]):
         for treatment in range(dgp.num_treatments):
             for idx_d, dosage in enumerate(dosage_grid):
                 state_seed = seed + 10_000 * i + 200 * treatment + idx_d
-                z_rep = np.repeat(z_eval[i : i + 1], n_per_state, axis=0)
+                z_rep = np.repeat(z_eval[i: i + 1], n_per_state, axis=0)
                 y_true = dgp.sample_potential(
                     z_rep,
                     np.full(n_per_state, treatment, dtype=np.int64),
@@ -2551,8 +2574,8 @@ def tcga_distribution_metrics(
                     seed=state_seed,
                 )
                 y_learned = learned_sampler(
-                    x_eval[i : i + 1],
-                    z_eval[i : i + 1],
+                    x_eval[i: i + 1],
+                    z_eval[i: i + 1],
                     treatment,
                     float(dosage),
                     n_per_state,
@@ -2564,9 +2587,9 @@ def tcga_distribution_metrics(
     return metrics
 
 
-def summarize_tcga_repetitions(repetitions: list[dict[str, dict[str, float]]]) -> dict[str, dict[str, float]]:
+def summarize_tcga_repetitions(repetitions: List[Dict[str, Dict[str, float]]]) -> Dict[str, Dict[str, float]]:
     methods = sorted(repetitions[0].keys())
-    summary: dict[str, dict[str, float]] = {}
+    summary: Dict[str, Dict[str, float]] = {}
     for method in methods:
         keys = sorted(repetitions[0][method].keys())
         summary[method] = {}
@@ -2577,7 +2600,7 @@ def summarize_tcga_repetitions(repetitions: list[dict[str, dict[str, float]]]) -
     return summary
 
 
-def write_tcga_tables(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
+def write_tcga_tables(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
     order = ["scigan", "vcnet", "drnet", "ganice"]
     csv_lines = ["method,extended_w1_mean,extended_w1_se,policy_error_mean,policy_error_se,mise_mean,mise_se,dpe_mean,dpe_se"]
     tex_lines = [
@@ -2606,7 +2629,7 @@ def write_tcga_tables(output_dir: Path, summary: dict[str, dict[str, float]]) ->
     (output_dir / "tcga_dose_table.tex").write_text("\n".join(tex_lines) + "\n", encoding="utf-8")
 
 
-def write_tcga_metric_bar_outputs(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
+def write_tcga_metric_bar_outputs(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
     methods = [method for method in ["scigan", "vcnet", "drnet", "ganice"] if method in summary]
     if not methods:
         return
@@ -2634,7 +2657,7 @@ def write_tcga_metric_bar_outputs(output_dir: Path, summary: dict[str, dict[str,
     )
 
 
-def write_tcga_additional_outputs(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
+def write_tcga_additional_outputs(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
     metrics = [
         ("crps", "CRPS", "min"),
         ("energy_distance", "ED", "min"),
@@ -2669,17 +2692,17 @@ def write_tcga_additional_outputs(output_dir: Path, summary: dict[str, dict[str,
 def write_tcga_quantile_band(
     output_dir: Path,
     dgp: TCGADoseDGP,
-    x_eval: np.ndarray,
-    z_eval: np.ndarray,
-    dosage_grid: np.ndarray,
-    samplers: dict[str, object],
+    x_eval: NDArray,
+    z_eval: NDArray,
+    dosage_grid: NDArray,
+    samplers: Dict[str, object],
     *,
     treatment: int,
     n_per_x: int,
     seed: int,
 ) -> None:
     quantiles = np.array([0.1, 0.5, 0.9], dtype=np.float64)
-    curves: dict[str, np.ndarray] = {}
+    curves: Dict[str, NDArray] = {}
     for name, sampler in samplers.items():
         values = np.zeros((dosage_grid.size, quantiles.size), dtype=np.float64)
         for idx_d, dosage in enumerate(dosage_grid):
@@ -2687,7 +2710,7 @@ def write_tcga_quantile_band(
             for i in range(x_eval.shape[0]):
                 state_seed = seed + 20_000 * idx_d + i
                 if name == "true":
-                    z_rep = np.repeat(z_eval[i : i + 1], n_per_x, axis=0)
+                    z_rep = np.repeat(z_eval[i: i + 1], n_per_x, axis=0)
                     samples = dgp.sample_potential(
                         z_rep,
                         np.full(n_per_x, treatment, dtype=np.int64),
@@ -2696,8 +2719,8 @@ def write_tcga_quantile_band(
                     )
                 else:
                     samples = sampler(
-                        x_eval[i : i + 1],
-                        z_eval[i : i + 1],
+                        x_eval[i: i + 1],
+                        z_eval[i: i + 1],
                         treatment,
                         float(dosage),
                         n_per_x,
@@ -2746,10 +2769,10 @@ def write_tcga_quantile_band_repetition_outputs(output_dir: Path) -> None:
     curve_files = sorted((output_dir / "replications").glob("tcga_rep_*/tcga_dose_quantile_band_curves.csv"))
     if not curve_files:
         return
-    per_method: dict[str, list[np.ndarray]] = {}
-    dosage_grid: np.ndarray | None = None
+    per_method: Dict[str, List[NDArray]] = {}
+    dosage_grid: NDArray | None = None
     for curve_file in curve_files:
-        method_rows: dict[str, list[tuple[float, np.ndarray]]] = {}
+        method_rows: Dict[str, List[Tuple[float, NDArray]]] = {}
         with curve_file.open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
                 method_rows.setdefault(row["method"], []).append(
@@ -2769,8 +2792,8 @@ def write_tcga_quantile_band_repetition_outputs(output_dir: Path) -> None:
         return
 
     csv_lines = ["method,dosage,q10,q10_se,q50,q50_se,q90,q90_se"]
-    curves_mean: dict[str, np.ndarray] = {}
-    curves_se: dict[str, np.ndarray] = {}
+    curves_mean: Dict[str, NDArray] = {}
+    curves_se: Dict[str, NDArray] = {}
     for method, curves in per_method.items():
         stacked = np.stack(curves, axis=0)
         curves_mean[method] = stacked.mean(axis=0)

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-def _mlp(input_dim: int, hidden_dims: tuple[int, ...], output_dim: int) -> nn.Sequential:
-    layers: list[nn.Module] = []
+def _mlp(input_dim: int, hidden_dims: Tuple[int, ...], output_dim: int) -> nn.Sequential:
+    layers: List[nn.Module] = []
     prev = input_dim
     for width in hidden_dims:
         layers.append(nn.Linear(prev, width))
@@ -37,7 +39,9 @@ class _BoundedHead(nn.Module):
 
 
 class CounterfactualGenerator(nn.Module):
-    def __init__(self, x_dim: int, num_treatments: int, hidden_dim: int, outcome_min: float, outcome_max: float) -> None:
+    def __init__(
+        self, x_dim: int, num_treatments: int, hidden_dim: int, outcome_min: float, outcome_max: float
+    ) -> None:
         super().__init__()
         self.shared = _mlp(x_dim + num_treatments + 1, (hidden_dim, hidden_dim), hidden_dim)
         self.heads = nn.ModuleList(
@@ -59,7 +63,9 @@ class CounterfactualDiscriminator(nn.Module):
 
 
 class ITEInferenceNetwork(nn.Module):
-    def __init__(self, x_dim: int, num_treatments: int, hidden_dim: int, outcome_min: float, outcome_max: float) -> None:
+    def __init__(
+        self, x_dim: int, num_treatments: int, hidden_dim: int, outcome_min: float, outcome_max: float
+    ) -> None:
         super().__init__()
         self.shared = _mlp(x_dim, (hidden_dim, hidden_dim), hidden_dim)
         self.heads = nn.ModuleList(
@@ -139,7 +145,7 @@ class GANITE:
         indices = torch.randint(0, n, size=(self.config.batch_size,), device=self.device)
         return indices
 
-    def fit(self, x: np.ndarray, t: np.ndarray, y: np.ndarray) -> "GANITE":
+    def fit(self, x: NDArray[np.float32], t: NDArray[np.int64], y: NDArray[np.float32]) -> "GANITE":
         x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
         t_t = torch.as_tensor(np.asarray(t, dtype=np.int64), device=self.device)
         y_t = torch.as_tensor(np.asarray(y, dtype=np.float32), device=self.device)
@@ -213,8 +219,12 @@ class GANITE:
             self.i_optimizer.step()
         return self
 
-    def predict_potential_outcomes(self, x: np.ndarray) -> np.ndarray:
-        x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
+    def predict_potential_outcomes(
+        self, x: NDArray[np.float32]
+    ) -> NDArray[np.float32]:
+        x_t = torch.as_tensor(
+            np.asarray(x, dtype=np.float32), device=self.device
+        )
         self.inference.eval()
         with torch.no_grad():
             y_hat = self.inference(x_t).cpu().numpy()

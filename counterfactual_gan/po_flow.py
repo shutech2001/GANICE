@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+from typing import List, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-def _mlp(input_dim: int, hidden_dims: tuple[int, ...], output_dim: int) -> nn.Sequential:
-    layers: list[nn.Module] = []
+def _mlp(input_dim: int, hidden_dims: Tuple[int, ...], output_dim: int) -> nn.Sequential:
+    layers: List[nn.Module] = []
     prev = input_dim
     for width in hidden_dims:
         layers.append(nn.Linear(prev, width))
@@ -71,15 +73,15 @@ class POFlowConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     rk4_steps: int = 16
-    outcome_min: float | None = None
-    outcome_max: float | None = None
+    outcome_min: Optional[float] = None
+    outcome_max: Optional[float] = None
     seed: int = 41
     device: str = "cpu"
 
 
 @dataclass(slots=True)
 class POFlowDiagnostics:
-    losses: list[float] = field(default_factory=list)
+    losses: List[float] = field(default_factory=list)
 
 
 class POFlow:
@@ -104,10 +106,10 @@ class POFlow:
 
     def fit(
         self,
-        x: np.ndarray,
-        treatment: np.ndarray,
-        y: np.ndarray,
-        sample_weight: np.ndarray | None = None,
+        x: NDArray,
+        treatment: NDArray,
+        y: NDArray,
+        sample_weight: Optional[NDArray] = None,
     ) -> "POFlow":
         x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
         treatment_t = torch.as_tensor(np.asarray(treatment, dtype=np.int64).reshape(-1), device=self.device)
@@ -173,11 +175,11 @@ class POFlow:
 
     def sample_potential(
         self,
-        x: np.ndarray,
-        treatment: np.ndarray | int,
+        x: NDArray,
+        treatment: NDArray | int,
         n_per_x: int = 1,
-        seed: int | None = None,
-    ) -> np.ndarray:
+        seed: Optional[int] = None,
+    ) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -208,7 +210,7 @@ class POFlow:
         self.velocity.train()
         return result.astype(np.float32)
 
-    def predict_potential_outcomes(self, x: np.ndarray, n_mc: int = 512) -> np.ndarray:
+    def predict_potential_outcomes(self, x: NDArray, n_mc: int = 512) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -218,7 +220,7 @@ class POFlow:
             means.append(samples.mean(axis=1).reshape(-1))
         return np.stack(means, axis=1).astype(np.float32)
 
-    def encode_factual(self, x: np.ndarray, treatment: np.ndarray, y: np.ndarray) -> np.ndarray:
+    def encode_factual(self, x: NDArray, treatment: NDArray, y: NDArray) -> NDArray:
         x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
         treatment_t = torch.as_tensor(np.asarray(treatment, dtype=np.int64).reshape(-1), device=self.device)
         y_t = torch.as_tensor(np.asarray(y, dtype=np.float32).reshape(-1, 1), device=self.device)
@@ -272,7 +274,7 @@ class POFlow:
             current_time += h
         return current, divergence_integral
 
-    def log_prob_potential(self, x: np.ndarray, treatment: np.ndarray | int, y: np.ndarray) -> np.ndarray:
+    def log_prob_potential(self, x: NDArray, treatment: NDArray | int, y: NDArray) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
             x_arr = x_arr[:, None]
@@ -301,10 +303,10 @@ class POFlow:
         self.velocity.train()
         return log_prob.astype(np.float32)
 
-    def negative_log_likelihood(self, x: np.ndarray, treatment: np.ndarray | int, y: np.ndarray) -> float:
+    def negative_log_likelihood(self, x: NDArray, treatment: NDArray | int, y: NDArray) -> float:
         return float(-np.mean(self.log_prob_potential(x, treatment, y)))
 
-    def predict_counterfactual(self, x: np.ndarray, treatment: np.ndarray, y: np.ndarray) -> np.ndarray:
+    def predict_counterfactual(self, x: NDArray, treatment: NDArray, y: NDArray) -> NDArray:
         z = self.encode_factual(x, treatment, y)
         cf_treatment = 1 - np.asarray(treatment, dtype=np.int64).reshape(-1)
         x_t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=self.device)
