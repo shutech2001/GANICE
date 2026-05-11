@@ -1,6 +1,6 @@
 # GANICE
 
-Materials for "**Extended Wasserstein-GAN Approach to Causal Distribution Learning: Density-Free Estimation and Minimax Optimality**".
+Materials for "[**Extended Wasserstein-GAN Approach to Causal Distribution Learning: Density-Free Estimation and Minimax Optimality**](https://arxiv.org/abs/2605.NNNNN)".
 
 # What is This Repository?
 
@@ -10,6 +10,9 @@ It also contains the experiments and standard methods implementation presented i
 ### Requirements and Setup
 
 ```bash
+# clone the repository
+git clone git@github.com:shutech2001/GANICE.git
+
 # build the environment with poetry
 poetry install
 
@@ -117,6 +120,14 @@ The script writes `metrics.json`, repetition-level JSON files, LaTeX/CSV tables,
 - `estimators/__init__.py`: package exports for the experiment modules.
 
 ## Citation
+```bibtex
+@article{tamano2026extended,
+    author={Tamano, Shu and Imaizumi, Masaaki},
+    journal={arXiv preprint arXiv:2605.NNNNN},
+    title={Extended {Wasserstein-GAN} Approach to Causal Distribution Learning: Density-Free Estimation and Minimax Optimality},
+    year={2026},
+}
+```
 
 ## Contact
 
