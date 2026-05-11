@@ -1,5 +1,5 @@
 [project]
-name = "counterfactual-gan"
+name = "GANICE"
 version = "0.1.0"
 description = ""
 authors = [
@@ -13,6 +13,10 @@ dependencies = [
     "matplotlib (>=3.10.8,<4.0.0)",
     "torch (>=2.11.0,<3.0.0)"
 ]
+
+
+[tool.poetry]
+packages = [{include = "estimators"}]
 
 
 [build-system]
