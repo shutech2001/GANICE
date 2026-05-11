@@ -99,22 +99,22 @@ The script writes `metrics.json`, repetition-level JSON files, LaTeX/CSV tables,
 ### File Description
 
 - `scripts/run_ganice_experiment.py`: main experiment runner for IHDP-Dist, Jobs/LaLonde, and TCGA-Dose. It trains GANICE and the baseline methods, computes all paper metrics, and writes tables and figures.
-- `counterfactual_gan/ganice.py`: GANICE implementation with finite-resolution, cell-normalized extended Wasserstein training and optional factual calibration terms.
-- `counterfactual_gan/neural.py`: shared neural-network modules and utilities used by GANICE.
-- `counterfactual_gan/metrics.py`: Wasserstein, CRPS, energy distance, MMD, CDF, quantile, tail, calibration, and PIT metric utilities.
-- `counterfactual_gan/ihdp.py`: IHDP-Dist data loader and semi-synthetic stochastic potential-outcome law.
-- `counterfactual_gan/jobs.py`: Jobs/LaLonde NSW/PSID loader, splitting logic, earnings transform, and helper utilities.
-- `counterfactual_gan/tcga.py`: TCGA-Dose loader, TCGA preprocessing, database download/extraction helpers, and stochastic treatment/dosage response law.
-- `counterfactual_gan/ganite.py`: GANITE baseline for binary-treatment benchmarks.
-- `counterfactual_gan/po_flow.py`: PO-Flow baseline with scalar continuous normalizing flows.
-- `counterfactual_gan/diff_po.py`: Diff-PO baseline with conditional diffusion and propensity weighting.
-- `counterfactual_gan/infs.py`: INFs baseline with nuisance and target normalizing flows.
-- `counterfactual_gan/dr_learner.py`: DR-Learner baseline for binary-treatment causal mean estimation.
-- `counterfactual_gan/scigan.py`: SCIGAN baseline for multiple treatments with continuous dosages.
-- `counterfactual_gan/vcnet.py`: VCNet baseline for continuous dosages.
-- `counterfactual_gan/drnet.py`: DRNet baseline for multiple treatments with continuous dosages.
-- `counterfactual_gan/utils.py`: small array and filesystem helpers.
-- `counterfactual_gan/__init__.py`: package exports for the experiment modules.
+- `estimators/ganice.py`: GANICE implementation with finite-resolution, cell-normalized extended Wasserstein training and optional factual calibration terms.
+- `estimators/neural.py`: shared neural-network modules and utilities used by GANICE.
+- `estimators/metrics.py`: Wasserstein, CRPS, energy distance, MMD, CDF, quantile, tail, calibration, and PIT metric utilities.
+- `estimators/ihdp.py`: IHDP-Dist data loader and semi-synthetic stochastic potential-outcome law.
+- `estimators/jobs.py`: Jobs/LaLonde NSW/PSID loader, splitting logic, earnings transform, and helper utilities.
+- `estimators/tcga.py`: TCGA-Dose loader, TCGA preprocessing, database download/extraction helpers, and stochastic treatment/dosage response law.
+- `estimators/ganite.py`: GANITE baseline for binary-treatment benchmarks.
+- `estimators/po_flow.py`: PO-Flow baseline with scalar continuous normalizing flows.
+- `estimators/diff_po.py`: Diff-PO baseline with conditional diffusion and propensity weighting.
+- `estimators/infs.py`: INFs baseline with nuisance and target normalizing flows.
+- `estimators/dr_learner.py`: DR-Learner baseline for binary-treatment causal mean estimation.
+- `estimators/scigan.py`: SCIGAN baseline for multiple treatments with continuous dosages.
+- `estimators/vcnet.py`: VCNet baseline for continuous dosages.
+- `estimators/drnet.py`: DRNet baseline for multiple treatments with continuous dosages.
+- `estimators/utils.py`: small array and filesystem helpers.
+- `estimators/__init__.py`: package exports for the experiment modules.
 
 ## Citation
 

@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from counterfactual_gan import (  # noqa: E402
+from estimators import (  # noqa: E402
     DiffPO,
     DiffPOConfig,
     DRLearner,
@@ -47,8 +47,8 @@ from counterfactual_gan import (  # noqa: E402
     VCNetConfig,
     download_tcga_db,
 )
-from counterfactual_gan.jobs import model_scale_to_earnings  # noqa: E402
-from counterfactual_gan.metrics import (  # noqa: E402
+from estimators.jobs import model_scale_to_earnings  # noqa: E402
+from estimators.metrics import (  # noqa: E402
     central_interval_coverage_width_1d,
     crps_empirical_1d,
     cvm_2samp_1d,
@@ -60,7 +60,7 @@ from counterfactual_gan.metrics import (  # noqa: E402
     sample_wasserstein_1_1d,
     tail_mean_error_1d,
 )
-from counterfactual_gan.utils import ensure_dir  # noqa: E402
+from estimators.utils import ensure_dir  # noqa: E402
 
 
 COLORS = {
