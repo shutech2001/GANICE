@@ -1,6 +1,6 @@
 # GANICE
 
-Materials for "[**Extended Wasserstein-GAN Approach to Causal Distribution Learning: Density-Free Estimation and Minimax Optimality**](https://arxiv.org/abs/2605.NNNNN)".
+Materials for "[**Extended Wasserstein-GAN Approach to Causal Distribution Learning: Density-Free Estimation and Minimax Optimality**](https://arxiv.org/abs/2605.10206)".
 
 # What is This Repository?
 
@@ -123,7 +123,7 @@ The script writes `metrics.json`, repetition-level JSON files, LaTeX/CSV tables,
 ```bibtex
 @article{tamano2026extended,
     author={Tamano, Shu and Imaizumi, Masaaki},
-    journal={arXiv preprint arXiv:2605.NNNNN},
+    journal={arXiv preprint arXiv:2605.10206},
     title={Extended {Wasserstein-GAN} Approach to Causal Distribution Learning: Density-Free Estimation and Minimax Optimality},
     year={2026},
 }
