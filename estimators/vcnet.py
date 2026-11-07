@@ -15,6 +15,8 @@ from .neural import ActivationName
 class TruncatedPowerBasis(nn.Module):
     """Truncated power spline basis on [0, 1] used by VCNet."""
 
+    knots: torch.Tensor
+
     def __init__(self, degree: int, knots: Tuple[float, ...]) -> None:
         super().__init__()
         if not isinstance(degree, int) or degree < 1:

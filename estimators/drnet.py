@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import Callable, List, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -97,7 +97,8 @@ class DRNetModule(nn.Module):
         )
 
     def _strata(self, dosage: torch.Tensor) -> torch.Tensor:
-        dosage = torch.clamp(
+        # Runtime supports a scalar lower bound with a tensor upper bound.
+        dosage = cast(Callable[[torch.Tensor, float, torch.Tensor], torch.Tensor], torch.clamp)(
             dosage.reshape(-1),
             0.0,
             torch.nextafter(torch.tensor(1.0, device=dosage.device), torch.tensor(0.0, device=dosage.device)),
@@ -123,7 +124,7 @@ class DRNetModule(nn.Module):
                     continue
                 local_idx = torch.nonzero(stratum_mask, as_tuple=False).reshape(-1)
                 global_idx = treatment_idx[local_idx]
-                out[global_idx] = self.heads[treatment_value][stratum](
+                out[global_idx] = cast(nn.ModuleList, self.heads[treatment_value])[stratum](
                     treatment_hidden[local_idx],
                     treatment_dosage[local_idx],
                 )

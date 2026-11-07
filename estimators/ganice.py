@@ -40,7 +40,7 @@ def _cell_indices(w: NDArray[np.float32], levels: NDArray[np.int64]) -> NDArray[
     return (grid * multipliers.reshape(1, -1)).sum(axis=1).astype(np.int64)
 
 
-def _cell_midpoints(cell_ids: NDArray[np.int64], levels: NDArray[np.int64]) -> NDArray[np.float32]:
+def _cell_midpoints(cell_ids: NDArray[np.int64], levels: NDArray[np.int64]) -> NDArray[np.float64]:
     ids = np.asarray(cell_ids, dtype=np.int64).reshape(-1)
     sides = 2**levels
     coords = np.zeros((ids.shape[0], levels.shape[0]), dtype=np.float32)
@@ -164,6 +164,8 @@ class _CellOutcomeCritic(nn.Module):
 
 
 class _CellContextOutcomeCritic(nn.Module):
+    anchor: torch.Tensor
+
     def __init__(
         self,
         num_cells: int,
@@ -519,8 +521,9 @@ class GANICE:
         self.observed_counts = observed_counts
         self.active_cells = active_cells
         self.cell_alias = cell_alias
-        self.y_dim = y_arr.shape[1]
-        self._build_networks(self.y_dim)
+        y_dim = y_arr.shape[1]
+        self.y_dim = y_dim
+        self._build_networks(y_dim)
         if self.generator is None or self.critic is None:
             raise RuntimeError("networks were not initialized")
         if self.generator_optimizer is None or self.critic_optimizer is None:

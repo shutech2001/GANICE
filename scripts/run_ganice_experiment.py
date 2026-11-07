@@ -4,11 +4,10 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import csv
 from dataclasses import replace
-import json
 from pathlib import Path
-import shutil
 import sys
-from typing import Callable, Dict, List, Optional, Tuple
+from tempfile import TemporaryDirectory
+from typing import Callable, Dict, List, Literal, Optional, Protocol, Tuple, TypedDict, cast
 
 import matplotlib
 import numpy as np
@@ -70,6 +69,10 @@ COLORS = {
     "diff_po": "#e7298a",
     "infs": "#a6761d",
     "dr_learner": "#666666",
+    "codite": "#8c564b",
+    "dnet": "#17becf",
+    "causal_drf": "#ff7f0e",
+    "skcd": "#9467bd",
     "scigan": "#7570b3",
     "vcnet": "#66a61e",
     "drnet": "#e6ab02",
@@ -78,9 +81,13 @@ COLORS = {
 LABELS = {
     "ganite": "GANITE",
     "po_flow": "PO-Flow",
-    "diff_po": "Diff-PO",
+    "diff_po": "DiffPO",
     "infs": "INFs",
     "dr_learner": "DR-Learner",
+    "codite": "CoDiTE",
+    "dnet": "DNet",
+    "causal_drf": "Causal-DRF",
+    "skcd": "SKCD (adapted)",
     "scigan": "SCIGAN",
     "vcnet": "VCNet",
     "drnet": "DRNet",
@@ -88,8 +95,20 @@ LABELS = {
     "ganice_no_cell_norm": "GANICE no cell norm",
     "ganice_pooled": "Pooled WGAN",
 }
-IHDP_QTE_METHODS = ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]
-DEFAULT_METHODS = ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]
+BINARY_METHODS = [
+    "ganite",
+    "po_flow",
+    "diff_po",
+    "infs",
+    "dr_learner",
+    "codite",
+    "dnet",
+    "causal_drf",
+    "skcd",
+    "ganice",
+]
+IHDP_QTE_METHODS = BINARY_METHODS
+DEFAULT_METHODS = BINARY_METHODS
 TCGA_METHODS = ["scigan", "vcnet", "drnet", "ganice"]
 ADDITIONAL_QUANTILES = np.array([0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95], dtype=np.float64)
 TAIL_LEVELS = np.array([0.05, 0.10, 0.90, 0.95], dtype=np.float64)
@@ -207,7 +226,6 @@ def save_metric_bar_plot(
     plt.xticks(x_axis, labels, rotation=rotation, ha="right" if rotation else "center")
     plt.ylabel(ylabel)
     plt.tight_layout()
-    plt.savefig(output_prefix.with_suffix(".png"), dpi=260)
     plt.savefig(output_prefix.with_suffix(".pdf"))
     plt.close()
 
@@ -228,6 +246,49 @@ def _summary_mean(row: Dict[str, float], metric: str) -> float:
 
 def _summary_se(row: Dict[str, float], metric: str) -> float:
     return float(row.get(f"{metric}_se", 0.0))
+
+
+def write_paper_metric_summary(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
+    """Keep the reported numbers and figure diagnostics in a reusable CSV."""
+    paper_metrics = {
+        "extended_w1",
+        "rct_w1",
+        "rct_w1_earnings",
+        "crps",
+        "factual_crps_earnings",
+        "energy_distance",
+        "ks",
+        "iqe",
+        "qte_error",
+        "qte_abs_error",
+        "dose_quantile_error",
+        "tail_error",
+        "calibration_error",
+        "pehe",
+        "sqrt_pehe",
+        "ate_abs_error",
+        "att_abs_error",
+        "policy_value",
+        "mise",
+        "dpe",
+        "policy_error",
+    }
+    paper_metrics.update(f"coverage_{_coverage_suffix(float(c))}" for c in COVERAGE_LEVELS)
+    paper_metrics.update(f"interval_width_{_coverage_suffix(float(c))}" for c in COVERAGE_LEVELS)
+    paper_metrics.update(_pit_key(idx) for idx in range(PIT_BINS))
+    metrics = sorted(
+        metric for metric in paper_metrics if any(metric in row or f"{metric}_mean" in row for row in summary.values())
+    )
+    with (output_dir / "metrics.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["method", *[column for metric in metrics for column in (metric, f"{metric}_se")]])
+        for method, row in summary.items():
+            writer.writerow(
+                [
+                    method,
+                    *[value for metric in metrics for value in (_summary_mean(row, metric), _summary_se(row, metric))],
+                ]
+            )
 
 
 def _format_table_value(value: float, se: float) -> str:
@@ -323,7 +384,6 @@ def save_metric_grid_bar_plot(
     for ax in axes.ravel()[len(metrics):]:
         ax.axis("off")
     plt.tight_layout()
-    plt.savefig(output_prefix.with_suffix(".png"), dpi=260)
     plt.savefig(output_prefix.with_suffix(".pdf"))
     plt.close(fig)
 
@@ -359,7 +419,6 @@ def save_interval_width_plot(
     plt.ylim(bottom=0.0)
     place_legend_outside()
     plt.tight_layout()
-    plt.savefig(output_prefix.with_suffix(".png"), dpi=260)
     plt.savefig(output_prefix.with_suffix(".pdf"))
     plt.close()
 
@@ -398,7 +457,6 @@ def save_pit_histogram_plot(
     for ax in axes.ravel()[len(methods):]:
         ax.axis("off")
     plt.tight_layout()
-    plt.savefig(output_prefix.with_suffix(".png"), dpi=260)
     plt.savefig(output_prefix.with_suffix(".pdf"))
     plt.close(fig)
 
@@ -585,8 +643,8 @@ def ihdp_ganice_config(
     factual_mse_weight: Optional[float] = None,
     generator_transport_weight: Optional[float] = None,
 ) -> GANICEConfig:
-    resolution = (0,) * (x_dim + 1) if pooled else (
-        cell_resolution if cell_resolution is not None else (0,) * x_dim + (1,)
+    resolution = (
+        (0,) * (x_dim + 1) if pooled else (cell_resolution if cell_resolution is not None else (0,) * x_dim + (1,))
     )
     return GANICEConfig(
         latent_dim=4,
@@ -607,9 +665,9 @@ def ihdp_ganice_config(
         factual_crps_samples=6,
         factual_mse_weight=(2.0 if factual_mse_weight is None else factual_mse_weight) if not pooled else 0.0,
         factual_mse_samples=6,
-        generator_transport_weight=(
-            0.75 if generator_transport_weight is None else generator_transport_weight
-        ) if not pooled else 3.0,
+        generator_transport_weight=(0.75 if generator_transport_weight is None else generator_transport_weight)
+        if not pooled
+        else 3.0,
         residual_quantile_calibration=not pooled,
         calibration_samples_per_observation=8 if quick else 12,
         calibration_grid_size=192 if quick else 256,
@@ -700,7 +758,9 @@ def ihdp_infs_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper:
     )
 
 
-def ihdp_dr_learner_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool) -> DRLearnerConfig:
+def ihdp_dr_learner_config(
+    seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool
+) -> DRLearnerConfig:
     return DRLearnerConfig(
         x_dim=x_dim,
         num_treatments=2,
@@ -719,9 +779,69 @@ def ihdp_dr_learner_config(seed: int, x_dim: int, outcome_lower: float, outcome_
 
 
 Sampler = Callable[[NDArray, int, int, Optional[int]], NDArray]
+TCGASampler = Callable[[NDArray, NDArray, int, float, int, Optional[int]], NDArray]
 
 
-def make_ganice_binary_sampler(model: GANICE, dgp: IHDPDistDGP) -> Sampler:
+class ConditionalOutcomeGenerator(Protocol):
+    def sample_conditional(
+        self, query: NDArray[np.float32], n: int, /, seed: Optional[int] = None
+    ) -> NDArray[np.float32]: ...
+
+
+class DistributionAccumulators(TypedDict):
+    state_count: int
+    extended_w1: float
+    crps: float
+    energy_distance: float
+    mmd2: float
+    ks: float
+    cvm: float
+    quantile_sq_sum: float
+    tail_error: float
+    coverage: dict[float, float]
+    interval_width: dict[float, float]
+    pit: NDArray[np.float64]
+
+
+class QTECurveData(TypedDict):
+    quantiles: list[float]
+    errors: dict[str, list[float]]
+
+
+class JobsSamplerDetails(TypedDict):
+    arm_samples_transformed: dict[int, NDArray]
+    arm_samples_earnings: dict[int, NDArray]
+    earnings_means: NDArray
+    effects: NDArray
+
+
+class JobsRepetitionDetails(TypedDict):
+    rct: dict[str, NDArray]
+    cdf_details: dict[str, JobsSamplerDetails]
+    rates: list[float]
+    policy_curves: dict[str, list[float]]
+    train_counts: dict[str, int]
+
+
+class IHDPCandidateSpec(TypedDict):
+    generator_transport_weight: float
+    factual_crps_weight: float
+    factual_mse_weight: float
+
+
+class JobsCandidateSpec(TypedDict):
+    num_steps: int
+    generator_transport_weight: float
+    factual_crps_weight: float
+
+
+class TCGABenchmarkPayload(TypedDict):
+    summary: dict[str, dict[str, float]]
+    ranking_by_extended_w1: list[tuple[str, float]]
+    ganice_best_extended_w1: bool
+
+
+def make_ganice_binary_sampler(model: ConditionalOutcomeGenerator, dgp: IHDPDistDGP) -> Sampler:
     def sampler(x: NDArray, treatment: int, n_per_x: int, seed: Optional[int]) -> NDArray:
         x_arr = np.asarray(x, dtype=np.float32)
         if x_arr.ndim == 1:
@@ -821,7 +941,7 @@ def ihdp_extended_w1(
     return float(total / count)
 
 
-def _empty_distribution_accumulators() -> Dict[str, object]:
+def _empty_distribution_accumulators() -> DistributionAccumulators:
     return {
         "state_count": 0,
         "extended_w1": 0.0,
@@ -838,7 +958,7 @@ def _empty_distribution_accumulators() -> Dict[str, object]:
     }
 
 
-def _accumulate_distribution_state(acc: Dict[str, object], predicted: NDArray, truth: NDArray) -> None:
+def _accumulate_distribution_state(acc: DistributionAccumulators, predicted: NDArray, truth: NDArray) -> None:
     predicted_1d = np.asarray(predicted, dtype=np.float64).reshape(-1)
     truth_1d = np.asarray(truth, dtype=np.float64).reshape(-1)
     acc["extended_w1"] = float(acc["extended_w1"]) + sample_wasserstein_1_1d(truth_1d, predicted_1d)
@@ -869,7 +989,7 @@ def _accumulate_distribution_state(acc: Dict[str, object], predicted: NDArray, t
     acc["state_count"] = int(acc["state_count"]) + 1
 
 
-def _finalize_distribution_accumulators(acc: Dict[str, object]) -> Dict[str, float]:
+def _finalize_distribution_accumulators(acc: DistributionAccumulators) -> Dict[str, float]:
     count = int(acc["state_count"])
     if count <= 0:
         return {}
@@ -979,16 +1099,21 @@ def summarize_metric_repetitions(repetitions: List[Dict[str, Dict[str, float]]])
                 dtype=np.float64,
             )
             summary[method][metric] = float(values.mean())
-            summary[method][f"{metric}_se"] = float(values.std(ddof=1) / np.sqrt(values.size)) if values.size > 1 else 0.0
+            summary[method][f"{metric}_se"] = (
+                float(values.std(ddof=1) / np.sqrt(values.size)) if values.size > 1 else 0.0
+            )
     return summary
 
 
 def write_ihdp_tables(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
-    ordered_methods = ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]
+    ordered_methods = [method for method in DEFAULT_METHODS if method in summary]
+    if not ordered_methods:
+        return
     best_ew = min(ordered_methods, key=lambda method: summary[method]["extended_w1"])
     best_pehe = min(ordered_methods, key=lambda method: summary[method]["sqrt_pehe"])
     csv_lines = [
-        "method,extended_w1,extended_w1_se,sqrt_pehe,sqrt_pehe_se,ate_abs_error,ate_abs_error_se,qte_abs_error,qte_abs_error_se"
+        "method,extended_w1,extended_w1_se,sqrt_pehe,sqrt_pehe_se,ate_abs_error,ate_abs_error_se,"
+        "qte_abs_error,qte_abs_error_se"
     ]
     tex_lines = [
         "\\begin{tabular}{lcc}",
@@ -1027,9 +1152,7 @@ def write_ihdp_tables(output_dir: Path, summary: Dict[str, Dict[str, float]]) ->
 
 
 def write_ihdp_metric_bar_outputs(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
-    methods = [
-        method for method in ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"] if method in summary
-    ]
+    methods = [method for method in DEFAULT_METHODS if method in summary]
     if not methods:
         return
     save_metric_bar_plot(
@@ -1038,7 +1161,6 @@ def write_ihdp_metric_bar_outputs(output_dir: Path, summary: Dict[str, Dict[str,
         [summary[method]["extended_w1"] for method in methods],
         [summary[method].get("extended_w1_se", 0.0) for method in methods],
         [COLORS.get(method, "#999999") for method in methods],
-        title="IHDP-Dist: distributional error",
         ylabel="empirical eW1",
     )
     save_metric_bar_plot(
@@ -1047,12 +1169,11 @@ def write_ihdp_metric_bar_outputs(output_dir: Path, summary: Dict[str, Dict[str,
         [summary[method]["sqrt_pehe"] for method in methods],
         [summary[method].get("sqrt_pehe_se", 0.0) for method in methods],
         [COLORS.get(method, "#999999") for method in methods],
-        title="IHDP-Dist: PEHE",
         ylabel="sqrt PEHE",
     )
 
 
-def write_ihdp_qte_error_outputs(output_dir: Path, qte_repetitions: List[Dict[str, object]]) -> None:
+def write_ihdp_qte_error_outputs(output_dir: Path, qte_repetitions: List[QTECurveData]) -> None:
     if not qte_repetitions:
         return
     quantiles = np.asarray(qte_repetitions[0]["quantiles"], dtype=np.float64)
@@ -1066,7 +1187,11 @@ def write_ihdp_qte_error_outputs(output_dir: Path, qte_repetitions: List[Dict[st
             dtype=np.float64,
         )
         mean_error = stacked.mean(axis=0)
-        se_error = stacked.std(axis=0, ddof=1) / np.sqrt(stacked.shape[0]) if stacked.shape[0] > 1 else np.zeros_like(mean_error)
+        se_error = (
+            stacked.std(axis=0, ddof=1) / np.sqrt(stacked.shape[0])
+            if stacked.shape[0] > 1
+            else np.zeros_like(mean_error)
+        )
         for quantile, mean_value, se_value in zip(quantiles, mean_error, se_error, strict=True):
             csv_lines.append(f"{quantile:.6f},{LABELS[method]},{mean_value:.8f},{se_value:.8f}")
         linewidth = 3.0 if method == "ganice" else 2.0
@@ -1093,9 +1218,6 @@ def write_ihdp_qte_error_outputs(output_dir: Path, qte_repetitions: List[Dict[st
     plt.ylim(bottom=0.0)
     place_legend_outside()
     plt.tight_layout()
-    plt.savefig(output_dir / "ihdp_qte_curve.png", dpi=260)
-    plt.savefig(output_dir / "ihdp_qte_curve.pdf")
-    plt.savefig(output_dir / "ihdp_qte_error.png", dpi=260)
     plt.savefig(output_dir / "ihdp_qte_error.pdf")
     plt.close()
     (output_dir / "ihdp_qte_error.csv").write_text("\n".join(csv_lines) + "\n", encoding="utf-8")
@@ -1123,7 +1245,6 @@ def write_ihdp_ablation_output(output_dir: Path, summary: Dict[str, Dict[str, fl
     plt.xticks(np.arange(len(labels)), labels, rotation=20, ha="right")
     plt.ylabel("empirical eW1")
     plt.tight_layout()
-    plt.savefig(output_dir / "ihdp_objective_ablation.png", dpi=260)
     plt.savefig(output_dir / "ihdp_objective_ablation.pdf")
     plt.close()
 
@@ -1132,9 +1253,7 @@ def write_ihdp_additional_outputs(output_dir: Path, summary: Dict[str, Dict[str,
     metrics = [
         ("crps", "CRPS", "min"),
         ("energy_distance", "ED", "min"),
-        ("mmd2", "MMD$^2$", "min"),
         ("ks", "KS", "min"),
-        ("cvm", "CvM", "min"),
         ("iqe", "IQE", "min"),
         ("qte_error", "QTEErr", "min"),
         ("tail_error", "TailErr", "min"),
@@ -1143,12 +1262,6 @@ def write_ihdp_additional_outputs(output_dir: Path, summary: Dict[str, Dict[str,
         ("ate_abs_error", "ATEErr", "min"),
     ]
     _write_additional_metric_table(output_dir, "ihdp_additional_metrics", summary, DEFAULT_METHODS, metrics)
-    save_metric_grid_bar_plot(
-        output_dir / "ihdp_additional_metrics_bar",
-        summary,
-        DEFAULT_METHODS,
-        [(key, label.replace("$", "")) for key, label, _ in metrics[:9]],
-    )
     save_interval_width_plot(
         output_dir / "ihdp_interval_widths",
         summary,
@@ -1156,19 +1269,9 @@ def write_ihdp_additional_outputs(output_dir: Path, summary: Dict[str, Dict[str,
         ylabel="average interval width",
     )
     save_pit_histogram_plot(output_dir / "ihdp_pit_histograms", summary, DEFAULT_METHODS)
-    density_metrics = [("density_nll", "NLL", "min")]
-    _write_additional_metric_table(
-        output_dir,
-        "ihdp_density_diagnostics",
-        summary,
-        ["po_flow", "infs"],
-        density_metrics,
-    )
 
 
-def run_single_ihdp_dist(
-    output_dir: Path, seed: int, quick: bool
-) -> Tuple[Dict[str, Dict[str, float]], Dict[str, object]]:
+def run_single_ihdp_dist(output_dir: Path, seed: int, quick: bool) -> Tuple[Dict[str, Dict[str, float]], QTECurveData]:
     dgp = IHDPDistDGP(seed=seed + 1, split_seed=seed + 2)
     train = dgp.observed_split("train", seed=seed + 3)
     validation_x, _ = dgp.split("validation")
@@ -1198,7 +1301,9 @@ def run_single_ihdp_dist(
     infs = INFs(ihdp_infs_config(seed + 31, dgp.feature_dim, outcome_lower, outcome_upper, quick=quick))
     infs.fit(train["x"], train["t"], train["y"])
 
-    dr_learner = DRLearner(ihdp_dr_learner_config(seed + 37, dgp.feature_dim, outcome_lower, outcome_upper, quick=quick))
+    dr_learner = DRLearner(
+        ihdp_dr_learner_config(seed + 37, dgp.feature_dim, outcome_lower, outcome_upper, quick=quick)
+    )
     dr_learner.fit(train["x"], train["t"], train["y"])
     dr_sampler = make_residual_plugin_sampler(
         dr_learner.predict_potential_outcomes,
@@ -1215,7 +1320,7 @@ def run_single_ihdp_dist(
     ganice_candidates: List[Tuple[float, GANICE]] = []
     restart_count = 2 if quick else 4
     validation_mc = 64 if quick else 96
-    ganice_candidate_specs = [
+    ganice_candidate_specs: list[IHDPCandidateSpec] = [
         {"generator_transport_weight": 0.75, "factual_crps_weight": 8.0, "factual_mse_weight": 2.0},
         {"generator_transport_weight": 1.25, "factual_crps_weight": 8.0, "factual_mse_weight": 2.0},
         {"generator_transport_weight": 0.75, "factual_crps_weight": 12.0, "factual_mse_weight": 1.0},
@@ -1350,32 +1455,20 @@ def run_single_ihdp_dist(
     qte_errors = {
         method: np.abs(qte_curves[method] - qte_curves["true"]).astype(np.float64)
         for method in IHDP_QTE_METHODS
+        if method in qte_curves
     }
     for method, error_curve in qte_errors.items():
         results[method]["qte_abs_error"] = float(error_curve.mean())
 
-    ablation_methods = ["ganice", "ganice_no_cell_norm", "ganice_pooled", "ganite"]
-    plt.figure(figsize=(10.2, 6.1))
-    values = [results[method]["extended_w1"] for method in ablation_methods]
-    labels = [LABELS[method] for method in ablation_methods]
-    colors = [COLORS.get(method, "#999999") for method in ablation_methods]
-    plt.bar(np.arange(len(labels)), values, color=colors)
-    plt.xticks(np.arange(len(labels)), labels, rotation=20, ha="right")
-    plt.ylabel("empirical eW1")
-    plt.tight_layout()
-    plt.savefig(output_dir / "ihdp_objective_ablation.png", dpi=260)
-    plt.savefig(output_dir / "ihdp_objective_ablation.pdf")
-    plt.close()
     return results, {
         "quantiles": quantiles.tolist(),
         "errors": {method: error_curve.tolist() for method, error_curve in qte_errors.items()},
     }
 
 
-def _run_ihdp_repetition(task: tuple[Path, int, int, bool]) -> tuple[dict[str, dict[str, float]], dict[str, object]]:
+def _run_ihdp_repetition(task: tuple[Path, int, int, bool]) -> tuple[dict[str, dict[str, float]], QTECurveData]:
     output_dir, seed, rep, quick = task
-    rep_dir = ensure_dir(output_dir / "replications" / f"ihdp_rep_{rep:03d}")
-    return run_single_ihdp_dist(rep_dir, seed + 10_000 * rep, quick=quick)
+    return run_single_ihdp_dist(output_dir, seed + 10_000 * rep, quick=quick)
 
 
 def run_ihdp_dist_benchmark(
@@ -1390,19 +1483,10 @@ def run_ihdp_dist_benchmark(
     per_repetition = [result for result, _ in rep_outputs]
     qte_repetitions = [qte_errors for _, qte_errors in rep_outputs]
     summary = summarize_metric_repetitions(per_repetition)
-    write_ihdp_tables(output_dir, summary)
-    write_ihdp_metric_bar_outputs(output_dir, summary)
     write_ihdp_qte_error_outputs(output_dir, qte_repetitions)
     write_ihdp_ablation_output(output_dir, summary)
     write_ihdp_additional_outputs(output_dir, summary)
-    (output_dir / "ihdp_dist_repetitions.json").write_text(
-        json.dumps(per_repetition, indent=2),
-        encoding="utf-8",
-    )
-    (output_dir / "ihdp_qte_error_repetitions.json").write_text(
-        json.dumps(qte_repetitions, indent=2),
-        encoding="utf-8",
-    )
+    write_paper_metric_summary(output_dir, summary)
     return summary
 
 
@@ -1448,7 +1532,9 @@ def jobs_ganice_config(
     )
 
 
-def jobs_ganite_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool) -> GANITEConfig:
+def jobs_ganite_config(
+    seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool
+) -> GANITEConfig:
     return GANITEConfig(
         x_dim=x_dim,
         hidden_dim=64 if quick else 128,
@@ -1464,7 +1550,9 @@ def jobs_ganite_config(seed: int, x_dim: int, outcome_lower: float, outcome_uppe
     )
 
 
-def jobs_po_flow_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool) -> POFlowConfig:
+def jobs_po_flow_config(
+    seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool
+) -> POFlowConfig:
     return POFlowConfig(
         x_dim=x_dim,
         num_treatments=2,
@@ -1479,7 +1567,9 @@ def jobs_po_flow_config(seed: int, x_dim: int, outcome_lower: float, outcome_upp
     )
 
 
-def jobs_diff_po_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool) -> DiffPOConfig:
+def jobs_diff_po_config(
+    seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool
+) -> DiffPOConfig:
     return DiffPOConfig(
         x_dim=x_dim,
         num_treatments=2,
@@ -1519,7 +1609,9 @@ def jobs_infs_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper:
     )
 
 
-def jobs_dr_learner_config(seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool) -> DRLearnerConfig:
+def jobs_dr_learner_config(
+    seed: int, x_dim: int, outcome_lower: float, outcome_upper: float, *, quick: bool
+) -> DRLearnerConfig:
     return DRLearnerConfig(
         x_dim=x_dim,
         num_treatments=2,
@@ -1538,7 +1630,7 @@ def jobs_dr_learner_config(seed: int, x_dim: int, outcome_lower: float, outcome_
 
 
 def make_ganice_jobs_sampler(
-    model: GANICE,
+    model: ConditionalOutcomeGenerator,
     data: JobsLaLondeData,
     zero_masses: Optional[Dict[int, float]] = None,
     arm_quantile_calibrators: Optional[Dict[int, Tuple[NDArray, NDArray]]] = None,
@@ -1600,10 +1692,7 @@ def fit_jobs_arm_quantile_calibrators(
 
 def jobs_nsw_zero_masses(data: JobsLaLondeData, split: str = "train") -> Dict[int, float]:
     rct = data.rct_split(split)
-    return {
-        arm: float(np.mean(rct["y_earnings"][rct["t"] == arm] <= 0.0))
-        for arm in (0, 1)
-    }
+    return {arm: float(np.mean(rct["y_earnings"][rct["t"] == arm] <= 0.0)) for arm in (0, 1)}
 
 
 def jobs_arm_samples(
@@ -1661,15 +1750,7 @@ def jobs_additional_metrics(
         "arm_crps_earnings": arm_metrics["crps"],
         "arm_w1_earnings": arm_metrics["extended_w1"],
         "qte_error": float(
-            np.sqrt(
-                np.mean(
-                    (
-                        (pred_quantiles[1] - pred_quantiles[0])
-                        - (true_quantiles[1] - true_quantiles[0])
-                    )
-                    ** 2
-                )
-            )
+            np.sqrt(np.mean(((pred_quantiles[1] - pred_quantiles[0]) - (true_quantiles[1] - true_quantiles[0])) ** 2))
         ),
     }
 
@@ -1751,7 +1832,8 @@ def jobs_evaluate_sampler(
     seed: int,
     *,
     include_additional: bool = True,
-) -> tuple[dict[str, float], dict[str, object]]:
+    earnings_mean_predictor: Optional[Callable[[NDArray], NDArray]] = None,
+) -> tuple[dict[str, float], JobsSamplerDetails]:
     x_rct = rct["x"]
     treatment = rct["t"]
     true_y = rct["y"].reshape(-1)
@@ -1770,7 +1852,20 @@ def jobs_evaluate_sampler(
     rct_w1 *= 0.5
     rct_w1_earnings *= 0.5
 
-    earnings_means = jobs_estimate_earnings_means(sampler, x_rct, mean_mc, seed + 20_000)
+    if earnings_mean_predictor is None:
+        earnings_means = jobs_estimate_earnings_means(
+            sampler,
+            x_rct,
+            mean_mc,
+            seed + 20_000,
+        )
+    else:
+        earnings_means = np.asarray(
+            earnings_mean_predictor(x_rct),
+            dtype=np.float64,
+        )
+        if earnings_means.shape != (x_rct.shape[0], 2):
+            raise ValueError("earnings_mean_predictor must return shape (n, 2)")
     effects = earnings_means[:, 1] - earnings_means[:, 0]
     treated_mask = treatment == 1
     estimated_att = float(effects[treated_mask].mean()) if np.any(treated_mask) else float(effects.mean())
@@ -1795,7 +1890,7 @@ def jobs_evaluate_sampler(
                 seed=seed + 30_000,
             )
         )
-    detail = {
+    detail: JobsSamplerDetails = {
         "arm_samples_transformed": arm_samples_transformed,
         "arm_samples_earnings": arm_samples_earnings,
         "earnings_means": earnings_means,
@@ -1827,11 +1922,14 @@ def summarize_jobs_repetitions(repetitions: list[dict[str, dict[str, float]]]) -
 
 
 def write_jobs_tables(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
-    ordered_methods = ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]
+    ordered_methods = [method for method in DEFAULT_METHODS if method in summary]
+    if not ordered_methods:
+        return
     best_w1 = min(ordered_methods, key=lambda method: summary[method]["rct_w1"])
     best_att = min(ordered_methods, key=lambda method: summary[method]["att_abs_error"])
     csv_lines = [
-        "method,rct_w1,rct_w1_se,rct_w1_earnings,rct_w1_earnings_se,att_abs_error,att_abs_error_se,policy_value,policy_value_se,policy_treat_rate,policy_treat_rate_se"
+        "method,rct_w1,rct_w1_se,rct_w1_earnings,rct_w1_earnings_se,att_abs_error,att_abs_error_se,"
+        "policy_value,policy_value_se"
     ]
     tex_lines = [
         "\\begin{tabular}{lcc}",
@@ -1853,8 +1951,6 @@ def write_jobs_tables(output_dir: Path, summary: dict[str, dict[str, float]]) ->
                     f"{metrics['att_abs_error_se']:.6f}",
                     f"{metrics['policy_value']:.6f}",
                     f"{metrics['policy_value_se']:.6f}",
-                    f"{metrics['policy_treat_rate']:.6f}",
-                    f"{metrics['policy_treat_rate_se']:.6f}",
                 ]
             )
         )
@@ -1871,7 +1967,7 @@ def write_jobs_tables(output_dir: Path, summary: dict[str, dict[str, float]]) ->
 
 
 def write_jobs_metric_bar_outputs(output_dir: Path, summary: dict[str, dict[str, float]]) -> None:
-    methods = [method for method in ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"] if method in summary]
+    methods = [method for method in DEFAULT_METHODS if method in summary]
     if not methods:
         return
     labels = [LABELS[method] for method in methods]
@@ -1882,7 +1978,6 @@ def write_jobs_metric_bar_outputs(output_dir: Path, summary: dict[str, dict[str,
         [summary[method]["rct_w1"] for method in methods],
         [summary[method].get("rct_w1_se", 0.0) for method in methods],
         colors,
-        title="Jobs/LaLonde: RCT-assisted distributional error",
         ylabel="RCT-W1",
     )
     save_metric_bar_plot(
@@ -1891,7 +1986,6 @@ def write_jobs_metric_bar_outputs(output_dir: Path, summary: dict[str, dict[str,
         [summary[method]["att_abs_error"] for method in methods],
         [summary[method].get("att_abs_error_se", 0.0) for method in methods],
         colors,
-        title="Jobs/LaLonde: ATT error",
         ylabel="absolute ATT error",
     )
 
@@ -1901,9 +1995,7 @@ def write_jobs_additional_outputs(output_dir: Path, summary: dict[str, dict[str,
         ("crps", "Factual CRPS", "min"),
         ("factual_crps_earnings", "CRPS earn.", "min"),
         ("energy_distance", "ED", "min"),
-        ("mmd2", "MMD$^2$", "min"),
         ("ks", "KS", "min"),
-        ("cvm", "CvM", "min"),
         ("iqe", "IQE", "min"),
         ("qte_error", "QTEErr", "min"),
         ("tail_error", "TailErr", "min"),
@@ -1912,12 +2004,6 @@ def write_jobs_additional_outputs(output_dir: Path, summary: dict[str, dict[str,
         ("policy_value", "Policy value", "max"),
     ]
     _write_additional_metric_table(output_dir, "jobs_additional_metrics", summary, DEFAULT_METHODS, metrics)
-    save_metric_grid_bar_plot(
-        output_dir / "jobs_additional_metrics_bar",
-        summary,
-        DEFAULT_METHODS,
-        [(key, label.replace("$", "")) for key, label, _ in metrics[:10]],
-    )
     save_interval_width_plot(
         output_dir / "jobs_interval_widths",
         summary,
@@ -1925,19 +2011,14 @@ def write_jobs_additional_outputs(output_dir: Path, summary: dict[str, dict[str,
         ylabel="average factual interval width (USD)",
     )
     save_pit_histogram_plot(output_dir / "jobs_pit_histograms", summary, DEFAULT_METHODS)
-    _write_additional_metric_table(
-        output_dir,
-        "jobs_density_diagnostics",
-        summary,
-        ["po_flow", "infs"],
-        [("density_nll", "NLL", "min")],
-    )
 
 
 def _plot_empirical_cdf(values: np.ndarray, label: str, color: str, linewidth: float, linestyle: str = "-") -> None:
     sorted_values = np.sort(np.asarray(values, dtype=np.float64).reshape(-1))
     probs = (np.arange(sorted_values.size, dtype=np.float64) + 1.0) / max(sorted_values.size, 1)
-    plt.step(sorted_values / 1000.0, probs, where="post", label=label, color=color, linewidth=linewidth, linestyle=linestyle)
+    plt.step(
+        sorted_values / 1000.0, probs, where="post", label=label, color=color, linewidth=linewidth, linestyle=linestyle
+    )
 
 
 def _cdf_on_grid(values: np.ndarray, grid: np.ndarray) -> np.ndarray:
@@ -1947,10 +2028,11 @@ def _cdf_on_grid(values: np.ndarray, grid: np.ndarray) -> np.ndarray:
     return np.searchsorted(sorted_values, grid, side="right").astype(np.float64) / float(sorted_values.size)
 
 
-def write_jobs_cdf_repetition_outputs(output_dir: Path, detail_repetitions: list[dict[str, object]]) -> None:
+def write_jobs_cdf_repetition_outputs(output_dir: Path, detail_repetitions: list[JobsRepetitionDetails]) -> None:
     if not detail_repetitions:
         return
-    methods = ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]
+    first_details = detail_repetitions[0].get("cdf_details", {})
+    methods = [method for method in DEFAULT_METHODS if method in first_details]
     csv_lines = ["arm,method,earnings_grid,cdf,cdf_se"]
     for arm, arm_name in [(1, "treated"), (0, "control")]:
         pooled_values: list[np.ndarray] = []
@@ -1966,13 +2048,19 @@ def write_jobs_cdf_repetition_outputs(output_dir: Path, detail_repetitions: list
         plt.figure(figsize=(10.8, 6.3))
         true_stack = np.stack(
             [
-                _cdf_on_grid(np.asarray(details["rct"]["y_earnings"][details["rct"]["t"] == arm], dtype=np.float64), grid)
+                _cdf_on_grid(
+                    np.asarray(details["rct"]["y_earnings"][details["rct"]["t"] == arm], dtype=np.float64), grid
+                )
                 for details in detail_repetitions
             ],
             axis=0,
         )
         true_mean = true_stack.mean(axis=0)
-        true_se = true_stack.std(axis=0, ddof=1) / np.sqrt(true_stack.shape[0]) if true_stack.shape[0] > 1 else np.zeros_like(true_mean)
+        true_se = (
+            true_stack.std(axis=0, ddof=1) / np.sqrt(true_stack.shape[0])
+            if true_stack.shape[0] > 1
+            else np.zeros_like(true_mean)
+        )
         plt.plot(grid / 1000.0, true_mean, label=f"NSW RCT {arm_name}", color=COLORS["true"], linewidth=3.0)
         plt.fill_between(
             grid / 1000.0,
@@ -1997,7 +2085,11 @@ def write_jobs_cdf_repetition_outputs(output_dir: Path, detail_repetitions: list
                 axis=0,
             )
             mean_curve = method_stack.mean(axis=0)
-            se_curve = method_stack.std(axis=0, ddof=1) / np.sqrt(method_stack.shape[0]) if method_stack.shape[0] > 1 else np.zeros_like(mean_curve)
+            se_curve = (
+                method_stack.std(axis=0, ddof=1) / np.sqrt(method_stack.shape[0])
+                if method_stack.shape[0] > 1
+                else np.zeros_like(mean_curve)
+            )
             linewidth = 3.0 if method == "ganice" else 1.9
             linestyle = "-" if method == "ganice" else "--"
             plt.plot(
@@ -2025,18 +2117,18 @@ def write_jobs_cdf_repetition_outputs(output_dir: Path, detail_repetitions: list
         plt.ylabel("empirical CDF")
         place_legend_outside()
         plt.tight_layout()
-        plt.savefig(output_dir / f"jobs_rct_cdf_{arm_name}.png", dpi=260)
         plt.savefig(output_dir / f"jobs_rct_cdf_{arm_name}.pdf")
         if arm == 1:
-            plt.savefig(output_dir / "jobs_rct_cdf.png", dpi=260)
             plt.savefig(output_dir / "jobs_rct_cdf.pdf")
         plt.close()
 
     (output_dir / "jobs_rct_cdf_mean.csv").write_text("\n".join(csv_lines) + "\n", encoding="utf-8")
 
 
-def write_jobs_cdf_outputs(output_dir: Path, rct: dict[str, np.ndarray], cdf_details: dict[str, dict[str, object]]) -> None:
-    methods = ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]
+def write_jobs_cdf_outputs(
+    output_dir: Path, rct: dict[str, np.ndarray], cdf_details: dict[str, JobsSamplerDetails]
+) -> None:
+    methods = [method for method in DEFAULT_METHODS if method in cdf_details]
     for arm, arm_name in [(1, "treated"), (0, "control")]:
         plt.figure(figsize=(10.8, 6.3))
         true_values = rct["y_earnings"][rct["t"] == arm]
@@ -2055,17 +2147,15 @@ def write_jobs_cdf_outputs(output_dir: Path, rct: dict[str, np.ndarray], cdf_det
         plt.ylabel("empirical CDF")
         place_legend_outside()
         plt.tight_layout()
-        plt.savefig(output_dir / f"jobs_rct_cdf_{arm_name}.png", dpi=260)
         plt.savefig(output_dir / f"jobs_rct_cdf_{arm_name}.pdf")
         if arm == 1:
-            plt.savefig(output_dir / "jobs_rct_cdf.png", dpi=260)
             plt.savefig(output_dir / "jobs_rct_cdf.pdf")
         plt.close()
 
 
 def write_jobs_policy_curve_output(output_dir: Path, rates: NDArray, curves: Dict[str, NDArray]) -> None:
     plt.figure(figsize=(10.6, 6.2))
-    for method in ["ganite", "po_flow", "diff_po", "infs", "dr_learner", "ganice"]:
+    for method in (name for name in DEFAULT_METHODS if name in curves):
         linewidth = 3.0 if method == "ganice" else 2.0
         linestyle = "-" if method == "ganice" else "--"
         plt.plot(
@@ -2080,7 +2170,6 @@ def write_jobs_policy_curve_output(output_dir: Path, rates: NDArray, curves: Dic
     plt.ylabel("RCT policy value (thousand USD)")
     place_legend_outside()
     plt.tight_layout()
-    plt.savefig(output_dir / "jobs_policy_curve.png", dpi=260)
     plt.savefig(output_dir / "jobs_policy_curve.pdf")
     plt.close()
 
@@ -2089,7 +2178,7 @@ def run_single_jobs_lalonde(
     seed: int,
     quick: bool,
     include_nsw_control_in_observed: bool,
-) -> Tuple[Dict[str, Dict[str, float]], Dict[str, object]]:
+) -> Tuple[Dict[str, Dict[str, float]], JobsRepetitionDetails]:
     data = JobsLaLondeData(
         split_seed=seed + 1,
         include_nsw_control_in_observed=include_nsw_control_in_observed,
@@ -2118,7 +2207,9 @@ def run_single_jobs_lalonde(
     infs = INFs(jobs_infs_config(seed + 31, data.feature_dim, outcome_lower, outcome_upper, quick=quick))
     infs.fit(train["x"], train["t"], train["y"])
 
-    dr_learner = DRLearner(jobs_dr_learner_config(seed + 37, data.feature_dim, outcome_lower, outcome_upper, quick=quick))
+    dr_learner = DRLearner(
+        jobs_dr_learner_config(seed + 37, data.feature_dim, outcome_lower, outcome_upper, quick=quick)
+    )
     dr_learner.fit(train["x"], train["t"], train["y"])
     dr_sampler = make_residual_plugin_sampler(
         dr_learner.predict_potential_outcomes,
@@ -2132,7 +2223,7 @@ def run_single_jobs_lalonde(
     ganice_zero_masses = jobs_nsw_zero_masses(data, "train")
     ganice_cell_transform = fit_jobs_cell_transform(train["x"])
     ganice_cell_dim = 3
-    ganice_candidates: List[Tuple[float, GANICE, Dict[str, float | int]]] = []
+    ganice_candidates: List[Tuple[float, GANICE, JobsCandidateSpec]] = []
     base_ganice_config = jobs_ganice_config(
         seed + 101,
         data.feature_dim,
@@ -2141,7 +2232,7 @@ def run_single_jobs_lalonde(
         quick=quick,
     )
     if quick:
-        ganice_candidate_specs: List[Dict[str, float | int]] = [
+        ganice_candidate_specs: List[JobsCandidateSpec] = [
             {"num_steps": 120, "generator_transport_weight": 4.0, "factual_crps_weight": 4.0},
             {"num_steps": 160, "generator_transport_weight": 6.0, "factual_crps_weight": 5.0},
             {"num_steps": 180, "generator_transport_weight": 4.0, "factual_crps_weight": 4.0},
@@ -2163,7 +2254,9 @@ def run_single_jobs_lalonde(
             d_w=data.d_w,
             train_w=train["w"],
             train_y=train["y"],
-            target_w_sampler=lambda n, seed=None, fitted_data=data: fitted_data.sample_target_w(n, seed=seed, split="test"),
+            target_w_sampler=lambda n, seed=None, fitted_data=data: fitted_data.sample_target_w(
+                n, seed=seed, split="test"
+            ),
             config=candidate_config,
             seed=seed + 151 + 100 * restart,
             d_cell_w=ganice_cell_dim,
@@ -2220,7 +2313,7 @@ def run_single_jobs_lalonde(
 
     true_att = data.rct_att_earnings("test")
     results: Dict[str, Dict[str, float]] = {}
-    details: Dict[str, Dict[str, object]] = {}
+    details: Dict[str, JobsSamplerDetails] = {}
     policy_curves: Dict[str, NDArray] = {}
     rates = np.linspace(0.0, 1.0, 21, dtype=np.float64)
     for method, sampler in samplers.items():
@@ -2246,7 +2339,7 @@ def run_single_jobs_lalonde(
     results["ganice"]["validation_rct_w1"] = float(ganice_validation_score)
     results["ganice"]["arm_quantile_calibration"] = float(bool(ganice_arm_calibrators))
     for key, value in ganice_selected_spec.items():
-        results["ganice"][f"selected_{key}"] = float(value)
+        results["ganice"][f"selected_{key}"] = float(cast(float | int, value))
     results["ganice"]["train_n"] = float(train["x"].shape[0])
     results["ganice"]["rct_test_n"] = float(test_rct["x"].shape[0])
     results["ganice"]["true_att"] = float(true_att)
@@ -2262,12 +2355,10 @@ def run_single_jobs_lalonde(
 
 
 def _run_jobs_repetition(
-    task: Tuple[Path, int, int, bool, bool]
-) -> Tuple[Dict[str, Dict[str, float]], Dict[str, object]]:
+    task: Tuple[Path, int, int, bool, bool],
+) -> Tuple[Dict[str, Dict[str, float]], JobsRepetitionDetails]:
     output_dir, seed, rep, quick, include_nsw_control_in_observed = task
-    rep_dir = ensure_dir(output_dir / "replications" / f"jobs_rep_{rep:03d}")
     return run_single_jobs_lalonde(
-        rep_dir,
         seed + 10_000 * rep,
         quick=quick,
         include_nsw_control_in_observed=include_nsw_control_in_observed,
@@ -2285,38 +2376,10 @@ def run_jobs_lalonde_benchmark(
     tasks = [(output_dir, seed, rep, quick, include_nsw_control_in_observed) for rep in range(repetitions)]
     rep_outputs = _run_parallel_repetitions(_run_jobs_repetition, tasks, parallel)
     per_repetition = [result for result, _ in rep_outputs]
-    last_details: Dict[str, object] | None = rep_outputs[-1][1] if rep_outputs else None
     summary = summarize_jobs_repetitions(per_repetition)
-    write_jobs_tables(output_dir, summary)
-    write_jobs_metric_bar_outputs(output_dir, summary)
     write_jobs_additional_outputs(output_dir, summary)
-    if last_details is not None:
-        write_jobs_cdf_outputs(
-            output_dir,
-            last_details["rct"],
-            last_details["cdf_details"],
-        )
-        write_jobs_policy_curve_output(
-            output_dir,
-            np.asarray(last_details["rates"], dtype=np.float64),
-            {method: np.asarray(values, dtype=np.float64) for method, values in last_details["policy_curves"].items()},
-        )
-        (output_dir / "jobs_lalonde_last_split.json").write_text(
-            json.dumps(
-                {
-                    "train_counts": last_details["train_counts"],
-                    "rates": last_details["rates"],
-                    "policy_curves": last_details["policy_curves"],
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
     write_jobs_cdf_repetition_outputs(output_dir, [details for _, details in rep_outputs])
-    (output_dir / "jobs_lalonde_repetitions.json").write_text(
-        json.dumps(per_repetition, indent=2),
-        encoding="utf-8",
-    )
+    write_paper_metric_summary(output_dir, summary)
     return summary
 
 
@@ -2392,11 +2455,15 @@ def build_tcga_scigan_grid(model: SCIGAN, dgp: TCGADoseDGP, x_test: NDArray, dos
     grid = np.zeros((x_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         for idx_d, dosage in enumerate(dosage_grid):
-            grid[:, treatment, idx_d] = model.predict_response(
-                x_test,
-                treatment=treatment,
-                dosage=np.full(x_test.shape[0], dosage, dtype=np.float32),
-            ).reshape(-1).astype(np.float64)
+            grid[:, treatment, idx_d] = (
+                model.predict_response(
+                    x_test,
+                    treatment=treatment,
+                    dosage=np.full(x_test.shape[0], dosage, dtype=np.float32),
+                )
+                .reshape(-1)
+                .astype(np.float64)
+            )
     return grid
 
 
@@ -2405,10 +2472,14 @@ def build_tcga_vcnet_grid(model: VCNet, dgp: TCGADoseDGP, x_test: NDArray, dosag
     for treatment in range(dgp.num_treatments):
         features = vcnet_features(x_test, treatment, dgp.num_treatments)
         for idx_d, dosage in enumerate(dosage_grid):
-            grid[:, treatment, idx_d] = model.predict_response(
-                features,
-                treatment=np.full(x_test.shape[0], dosage, dtype=np.float32),
-            ).reshape(-1).astype(np.float64)
+            grid[:, treatment, idx_d] = (
+                model.predict_response(
+                    features,
+                    treatment=np.full(x_test.shape[0], dosage, dtype=np.float32),
+                )
+                .reshape(-1)
+                .astype(np.float64)
+            )
     return grid
 
 
@@ -2416,15 +2487,21 @@ def build_tcga_drnet_grid(model: DRNet, dgp: TCGADoseDGP, x_test: NDArray, dosag
     grid = np.zeros((x_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         for idx_d, dosage in enumerate(dosage_grid):
-            grid[:, treatment, idx_d] = model.predict_response(
-                x_test,
-                treatment=treatment,
-                dosage=np.full(x_test.shape[0], dosage, dtype=np.float32),
-            ).reshape(-1).astype(np.float64)
+            grid[:, treatment, idx_d] = (
+                model.predict_response(
+                    x_test,
+                    treatment=treatment,
+                    dosage=np.full(x_test.shape[0], dosage, dtype=np.float32),
+                )
+                .reshape(-1)
+                .astype(np.float64)
+            )
     return grid
 
 
-def build_tcga_ganice_grid(model: GANICE, dgp: TCGADoseDGP, x_test: NDArray, dosage_grid: NDArray, n_mc: int) -> NDArray:
+def build_tcga_ganice_grid(
+    model: GANICE, dgp: TCGADoseDGP, x_test: NDArray, dosage_grid: NDArray, n_mc: int
+) -> NDArray:
     grid = np.zeros((x_test.shape[0], dgp.num_treatments, dosage_grid.size), dtype=np.float64)
     for treatment in range(dgp.num_treatments):
         for idx_d, dosage in enumerate(dosage_grid):
@@ -2457,10 +2534,10 @@ def sample_tcga_ganice_target_w(
     dgp: TCGADoseDGP,
     n: int,
     seed: Optional[int],
-    split: str = "test",
+    split: Literal["train", "val", "test"] = "test",
 ) -> NDArray:
     rng = np.random.default_rng(seed)
-    _, z_pool = dgp.split_arrays(split)  # type: ignore[arg-type]
+    _, z_pool = dgp.split_arrays(split)
     draw = rng.integers(0, z_pool.shape[0], size=n)
     treatment = rng.integers(0, dgp.num_treatments, size=n)
     dosage = rng.choice(dgp.dosage_grid, size=n, replace=True)
@@ -2596,13 +2673,17 @@ def summarize_tcga_repetitions(repetitions: List[Dict[str, Dict[str, float]]]) -
         for key in keys:
             values = np.asarray([rep[method][key] for rep in repetitions if key in rep[method]], dtype=np.float64)
             summary[method][f"{key}_mean"] = float(np.mean(values))
-            summary[method][f"{key}_se"] = float(np.std(values, ddof=1) / np.sqrt(values.size)) if values.size > 1 else 0.0
+            summary[method][f"{key}_se"] = (
+                float(np.std(values, ddof=1) / np.sqrt(values.size)) if values.size > 1 else 0.0
+            )
     return summary
 
 
 def write_tcga_tables(output_dir: Path, summary: Dict[str, Dict[str, float]]) -> None:
     order = ["scigan", "vcnet", "drnet", "ganice"]
-    csv_lines = ["method,extended_w1_mean,extended_w1_se,policy_error_mean,policy_error_se,mise_mean,mise_se,dpe_mean,dpe_se"]
+    csv_lines = [
+        "method,extended_w1_mean,extended_w1_se,policy_error_mean,policy_error_se,mise_mean,mise_se,dpe_mean,dpe_se"
+    ]
     tex_lines = [
         "\\begin{tabular}{lcc}",
         "\\toprule",
@@ -2641,7 +2722,6 @@ def write_tcga_metric_bar_outputs(output_dir: Path, summary: Dict[str, Dict[str,
         [summary[method]["extended_w1_mean"] for method in methods],
         [summary[method].get("extended_w1_se", 0.0) for method in methods],
         colors,
-        title="TCGA-Dose: distributional error",
         ylabel="empirical eW1",
         rotation=15,
     )
@@ -2651,7 +2731,6 @@ def write_tcga_metric_bar_outputs(output_dir: Path, summary: Dict[str, Dict[str,
         [summary[method]["policy_error_mean"] for method in methods],
         [summary[method].get("policy_error_se", 0.0) for method in methods],
         colors,
-        title="TCGA-Dose: policy error",
         ylabel="policy error",
         rotation=15,
     )
@@ -2661,10 +2740,7 @@ def write_tcga_additional_outputs(output_dir: Path, summary: Dict[str, Dict[str,
     metrics = [
         ("crps", "CRPS", "min"),
         ("energy_distance", "ED", "min"),
-        ("mmd2", "MMD$^2$", "min"),
         ("ks", "KS", "min"),
-        ("cvm", "CvM", "min"),
-        ("iqe", "IQE", "min"),
         ("dose_quantile_error", "DQErr", "min"),
         ("tail_error", "TailErr", "min"),
         ("calibration_error", "CalErr", "min"),
@@ -2673,13 +2749,6 @@ def write_tcga_additional_outputs(output_dir: Path, summary: Dict[str, Dict[str,
         ("policy_error", "PE", "min"),
     ]
     _write_additional_metric_table(output_dir, "tcga_additional_metrics", summary, TCGA_METHODS, metrics)
-    save_metric_grid_bar_plot(
-        output_dir / "tcga_additional_metrics_bar",
-        summary,
-        TCGA_METHODS,
-        [(key, label.replace("$", "")) for key, label, _ in metrics[:9]],
-        rotation=15,
-    )
     save_interval_width_plot(
         output_dir / "tcga_interval_widths",
         summary,
@@ -2695,7 +2764,7 @@ def write_tcga_quantile_band(
     x_eval: NDArray,
     z_eval: NDArray,
     dosage_grid: NDArray,
-    samplers: Dict[str, object],
+    samplers: Dict[str, Optional[TCGASampler]],
     *,
     treatment: int,
     n_per_x: int,
@@ -2718,7 +2787,7 @@ def write_tcga_quantile_band(
                         seed=state_seed,
                     )
                 else:
-                    samples = sampler(
+                    samples = cast(TCGASampler, sampler)(
                         x_eval[i: i + 1],
                         z_eval[i: i + 1],
                         treatment,
@@ -2760,13 +2829,14 @@ def write_tcga_quantile_band(
     plt.ylabel("outcome")
     place_legend_outside()
     plt.tight_layout()
-    plt.savefig(output_dir / "tcga_dose_quantile_band.png", dpi=260)
     plt.savefig(output_dir / "tcga_dose_quantile_band.pdf")
     plt.close()
 
 
-def write_tcga_quantile_band_repetition_outputs(output_dir: Path) -> None:
-    curve_files = sorted((output_dir / "replications").glob("tcga_rep_*/tcga_dose_quantile_band_curves.csv"))
+def write_tcga_quantile_band_repetition_outputs(output_dir: Path, curve_root: Path | None = None) -> None:
+    curve_files = sorted(
+        ((curve_root or output_dir) / "replications").glob("tcga_rep_*/tcga_dose_quantile_band_curves.csv")
+    )
     if not curve_files:
         return
     per_method: Dict[str, List[NDArray]] = {}
@@ -2797,7 +2867,11 @@ def write_tcga_quantile_band_repetition_outputs(output_dir: Path) -> None:
     for method, curves in per_method.items():
         stacked = np.stack(curves, axis=0)
         curves_mean[method] = stacked.mean(axis=0)
-        curves_se[method] = stacked.std(axis=0, ddof=1) / np.sqrt(stacked.shape[0]) if stacked.shape[0] > 1 else np.zeros_like(curves_mean[method])
+        curves_se[method] = (
+            stacked.std(axis=0, ddof=1) / np.sqrt(stacked.shape[0])
+            if stacked.shape[0] > 1
+            else np.zeros_like(curves_mean[method])
+        )
         for dosage, mean_values, se_values in zip(dosage_grid, curves_mean[method], curves_se[method], strict=True):
             csv_lines.append(
                 f"{method},{float(dosage):.8f},"
@@ -2858,7 +2932,6 @@ def write_tcga_quantile_band_repetition_outputs(output_dir: Path) -> None:
     plt.ylabel("outcome")
     place_legend_outside()
     plt.tight_layout()
-    plt.savefig(output_dir / "tcga_dose_quantile_band.png", dpi=260)
     plt.savefig(output_dir / "tcga_dose_quantile_band.pdf")
     plt.close()
 
@@ -2903,9 +2976,15 @@ def run_single_tcga_dose(output_dir: Path, data_dir: Path, seed: int, quick: boo
     scigan_residuals = train["y"] - predict_scigan_factual(scigan, train["x"], train["t"], train["d"])
     vcnet_residuals = train["y"] - vcnet.predict_response(vcnet_train_x, train["d"])
     drnet_residuals = train["y"] - drnet.predict_response(train["x"], train["t"], train["d"])
-    scigan_pools = residual_pools_by_treatment_dose(train["t"], train["d"], scigan_residuals, num_treatments=dgp.num_treatments)
-    vcnet_pools = residual_pools_by_treatment_dose(train["t"], train["d"], vcnet_residuals, num_treatments=dgp.num_treatments)
-    drnet_pools = residual_pools_by_treatment_dose(train["t"], train["d"], drnet_residuals, num_treatments=dgp.num_treatments)
+    scigan_pools = residual_pools_by_treatment_dose(
+        train["t"], train["d"], scigan_residuals, num_treatments=dgp.num_treatments
+    )
+    vcnet_pools = residual_pools_by_treatment_dose(
+        train["t"], train["d"], vcnet_residuals, num_treatments=dgp.num_treatments
+    )
+    drnet_pools = residual_pools_by_treatment_dose(
+        train["t"], train["d"], drnet_residuals, num_treatments=dgp.num_treatments
+    )
 
     def scigan_sampler(x, z, treatment, dosage, n, seed):
         del z
@@ -2990,39 +3069,32 @@ def run_tcga_dose_benchmark(
     repetitions: int,
     quick: bool,
     parallel: int = 1,
-) -> dict[str, dict[str, float] | object]:
-    tasks = [(output_dir, data_dir, seed, rep, quick) for rep in range(repetitions)]
-    per_repetition = _run_parallel_repetitions(_run_tcga_repetition, tasks, parallel)
-    summary = summarize_tcga_repetitions(per_repetition)
-    write_tcga_tables(output_dir, summary)
-    write_tcga_metric_bar_outputs(output_dir, summary)
-    write_tcga_additional_outputs(output_dir, summary)
-    if repetitions > 0:
-        last_rep_dir = output_dir / "replications" / f"tcga_rep_{repetitions - 1:03d}"
-        for suffix in ("png", "pdf"):
-            source = last_rep_dir / f"tcga_dose_quantile_band.{suffix}"
-            if source.exists():
-                shutil.copy2(source, output_dir / source.name)
-    write_tcga_quantile_band_repetition_outputs(output_dir)
+) -> TCGABenchmarkPayload:
+    with TemporaryDirectory(prefix="ganice_tcga_") as scratch:
+        curve_root = Path(scratch)
+        tasks = [(curve_root, data_dir, seed, rep, quick) for rep in range(repetitions)]
+        per_repetition = _run_parallel_repetitions(_run_tcga_repetition, tasks, parallel)
+        summary = summarize_tcga_repetitions(per_repetition)
+        write_tcga_additional_outputs(output_dir, summary)
+        write_tcga_quantile_band_repetition_outputs(output_dir, curve_root)
+    write_paper_metric_summary(output_dir, summary)
     ranking = sorted(
         ((method, values["extended_w1_mean"]) for method, values in summary.items()),
         key=lambda item: item[1],
     )
-    payload: dict[str, dict[str, float] | object] = {
+    payload: TCGABenchmarkPayload = {
         "summary": summary,
         "ranking_by_extended_w1": ranking,
         "ganice_best_extended_w1": bool(ranking and ranking[0][0] == "ganice"),
     }
-    (output_dir / "tcga_dose_repetitions.json").write_text(
-        json.dumps(per_repetition, indent=2),
-        encoding="utf-8",
-    )
     return payload
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run GANICE IHDP/Jobs/TCGA full-data experiments and baseline comparisons.")
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/ganice_experiment"))
+    parser = argparse.ArgumentParser(
+        description="Run GANICE IHDP/Jobs/TCGA full-data experiments and baseline comparisons."
+    )
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
         "--benchmark",
@@ -3030,14 +3102,21 @@ def main() -> None:
         default="all",
         help="Select a benchmark; use jobs for the Jobs/LaLonde real-data experiment.",
     )
-    parser.add_argument("--repetitions", type=int, default=1, help="Number of random splits/seeds for repeated benchmarks.")
+    parser.add_argument(
+        "--repetitions", type=int, default=1, help="Number of random splits/seeds for repeated benchmarks."
+    )
     parser.add_argument("--parallel", type=int, default=1, help="Maximum number of repetitions to run concurrently.")
-    parser.add_argument("--quick", action="store_true", help="Use shorter training and evaluation settings where available.")
+    parser.add_argument(
+        "--quick", action="store_true", help="Use shorter training and evaluation settings where available."
+    )
     parser.add_argument(
         "--jobs-observed-controls",
         choices=("psid_nsw", "psid"),
         default="psid",
-        help="Use PSID plus NSW train-split controls, or the stricter NSW-treated plus PSID-controls observational design.",
+        help=(
+            "Use PSID plus NSW train-split controls, or the stricter "
+            "NSW-treated plus PSID-controls observational design."
+        ),
     )
     parser.add_argument("--tcga-data-dir", type=Path, default=Path("Data/TCGA"))
     parser.add_argument(
@@ -3053,12 +3132,12 @@ def main() -> None:
     args = parser.parse_args()
 
     output_dir = ensure_dir(args.output_dir)
-    metrics = {}
+    metrics: dict[str, dict[str, dict[str, float]] | TCGABenchmarkPayload] = {}
     if args.tcga_download:
         download_tcga_db(args.tcga_data_dir, force=args.tcga_force_download)
     if args.benchmark in ("all", "ihdp"):
         metrics["ihdp_dist"] = run_ihdp_dist_benchmark(
-            output_dir,
+            ensure_dir(output_dir / "IHDP"),
             args.seed + 1_000,
             repetitions=args.repetitions,
             quick=args.quick,
@@ -3066,7 +3145,7 @@ def main() -> None:
         )
     if args.benchmark in ("all", "jobs"):
         metrics["jobs_lalonde"] = run_jobs_lalonde_benchmark(
-            output_dir,
+            ensure_dir(output_dir / "Jobs"),
             args.seed + 1_500,
             repetitions=args.repetitions,
             quick=args.quick,
@@ -3075,7 +3154,7 @@ def main() -> None:
         )
     if args.benchmark in ("all", "tcga"):
         metrics["tcga_dose"] = run_tcga_dose_benchmark(
-            output_dir,
+            ensure_dir(output_dir / "TCGA"),
             args.tcga_data_dir,
             args.seed + 3_500,
             repetitions=args.repetitions,
@@ -3083,9 +3162,10 @@ def main() -> None:
             parallel=args.parallel,
         )
 
-    metrics_path = output_dir / "metrics.json"
-    metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    print(json.dumps(metrics, indent=2))
+    if all((output_dir / name / "metrics.csv").is_file() for name in ("IHDP", "Jobs", "TCGA")):
+        from scripts.run_paper_experiments import write_main_results
+
+        write_main_results(output_dir)
     print(f"saved outputs to {output_dir}")
 
 
