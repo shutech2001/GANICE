@@ -5,7 +5,7 @@ import io
 import sqlite3
 import urllib.request
 from pathlib import Path
-from typing import Dict, Literal, Optional, Tuple
+from typing import Dict, Literal, Optional, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -372,7 +372,7 @@ class TCGADoseDGP:
         rng = make_rng(seed)
         x, z = self.split_arrays(split)
         probs = self.treatment_propensity(z)
-        uniforms = rng.random(x.shape[0])
+        uniforms = cast(NDArray[np.float64], rng.random(x.shape[0]))
         treatment = np.sum(uniforms[:, None] > np.cumsum(probs, axis=1), axis=1).astype(np.int64)
         d_star = np.array([self.optimal_dosage(z[i: i + 1], int(treatment[i]))[0] for i in range(x.shape[0])])
         alpha = 1.0 + self.alpha_d * d_star

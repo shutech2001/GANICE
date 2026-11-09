@@ -23,101 +23,116 @@ eval $(poetry env activate)
 poetry env info --path
 ```
 
-The experiments expect the benchmark data under `Data/`. The repository uses:
+The experiments expect the benchmark data under `Data/`.
+The repository uses:
 
 - `Data/IHDP/sim.data` for IHDP-Dist.
 - `Data/Jobs/nsw_treated.txt`, `Data/Jobs/nsw_control.txt`, and `Data/Jobs/psid_controls.txt` for Jobs/LaLonde.
 - `Data/TCGA/tcga.db` or the extracted TCGA `.npz` cache for TCGA-Dose.
 
-### Executing Experiments
+### Reproducing the paper
 
-The main entry point is:
-
-```bash
-poetry run python scripts/run_ganice_experiment.py [options]
-```
-
-Available benchmark choices are:
+Run the main benchmarks, implementation diagnostics, and finite-state sensitivity analysis with:
 
 ```bash
---benchmark all   # run IHDP-Dist, Jobs/LaLonde, and TCGA-Dose
---benchmark ihdp  # run IHDP-Dist only
---benchmark jobs  # run Jobs/LaLonde only
---benchmark tcga  # run TCGA-Dose only
+poetry run python scripts/run_paper_experiments.py --parallel 12
 ```
 
-For the full 100-repetition experiments used in the paper:
+The benchmark experiments use 100 repetitions.
+Implementation diagnostics use 10 paired repetitions for IHDP, 10 for Jobs, and 5 for TCGA.
+Sensitivity analysis uses the six factors and three optimization seeds reported in the paper.
+The existing model hyperparameters, preprocessing, data splits, and evaluation settings are retained.
+
+The benchmark and implementation runners default to `--seed 7` and use deterministic offsets for separate random streams.
+The sensitivity runner defaults to `--seed 42`;
+this replaces its former date-based seed.
+Existing saved sensitivity results have been retained without recomputation, so rerunning that analysis with the new default will change its numerical results.
+
+All results are saved under `outputs/`:
+
+```text
+outputs/
+  main_results.csv, main_results.tex
+  IHDP/             # IHDP figures, appendix table, and underlying numbers
+  Jobs/             # Jobs figures, appendix table, and underlying numbers
+  TCGA/             # TCGA figures, appendix table, and underlying numbers
+  implementation/   # Paired shared/routed table and transfer-discrepancy numbers
+  sensitivity/      # Six-factor relative-error table and underlying numbers
+```
+
+Figures are PDFs with the filenames used in the manuscript.
+Tables are provided as LaTeX and CSV;
+`metrics.csv` in each benchmark folder retains the unrounded means and standard errors needed for the tables, interval widths, PIT plots, and objective ablation.
+Only results used in the paper are retained.
+
+Run a subset with:
 
 ```bash
-poetry run python scripts/run_ganice_experiment.py \
-  --benchmark ihdp \
-  --repetitions 100 \
-  --parallel 12 \
-  --output-dir outputs_ganice_100/IHDP
-
-poetry run python scripts/run_ganice_experiment.py \
-  --benchmark jobs \
-  --repetitions 100 \
-  --parallel 12 \
-  --output-dir outputs_ganice_100/Jobs
-
-poetry run python scripts/run_ganice_experiment.py \
-  --benchmark tcga \
-  --repetitions 100 \
-  --parallel 12 \
-  --output-dir outputs_ganice_100/TCGA
+poetry run python scripts/run_paper_experiments.py --sections benchmarks --parallel 12
+poetry run python scripts/run_paper_experiments.py --sections implementation --parallel 12
+poetry run python scripts/run_paper_experiments.py --sections sensitivity --parallel 12
 ```
 
-For a quick smoke test:
+To rebuild the combined main table from existing benchmark CSVs without fitting:
 
 ```bash
-poetry run python scripts/run_ganice_experiment.py \
-  --benchmark all \
-  --quick \
-  --repetitions 1 \
-  --parallel 1 \
-  --output-dir outputs_smoke
+poetry run python scripts/run_paper_experiments.py --tables-only
 ```
 
-Useful options:
+For a shorter benchmark check, use a separate temporary directory:
 
 ```bash
---output-dir PATH
---seed INT
---repetitions INT
---parallel INT
---quick
---jobs-observed-controls {psid,psid_nsw}
---tcga-data-dir PATH
---tcga-download
---tcga-force-download
+poetry run python scripts/run_paper_experiments.py \
+  --sections benchmarks --quick --repetitions 1 --parallel 1 \
+  --output-dir /tmp/ganice-paper-check
 ```
 
-`--jobs-observed-controls psid` trains the Jobs/LaLonde observational sample on NSW treated units plus PSID controls. `--jobs-observed-controls psid_nsw` additionally includes NSW train-split controls.
+Individual runners remain available:
 
-`--tcga-download` downloads DRNet's `tcga.db` into `--tcga-data-dir` before running TCGA-Dose. Use `--tcga-force-download` to overwrite an existing database.
+```bash
+# Original benchmark methods; --benchmark also accepts ihdp, jobs, or tcga.
+poetry run python scripts/run_ganice_experiment.py --benchmark all --repetitions 100 --parallel 12
 
-The script writes `metrics.json`, repetition-level JSON files, LaTeX/CSV tables, and PDF/PNG figures into the selected output directory. Reported metrics include extended Wasserstein error, CRPS, energy distance, MMD, KS, CvM, quantile errors, tail errors, calibration diagnostics, PIT histograms, and native causal metrics.
+# Fit the four added binary-treatment methods and merge existing benchmark CSVs.
+poetry run python scripts/run_additional_baselines.py --benchmark all --repetitions 100 --parallel 12
 
-### File Description
+# Appendix implementation and sensitivity tables.
+poetry run python scripts/run_implementation_transfer_diagnostics.py --parallel 12
+poetry run python scripts/run_stress_tests.py --parallel 12
+```
 
-- `scripts/run_ganice_experiment.py`: main experiment runner for IHDP-Dist, Jobs/LaLonde, and TCGA-Dose. It trains GANICE and the baseline methods, computes all paper metrics, and writes tables and figures.
-- `estimators/ganice.py`: GANICE implementation with finite-resolution, cell-normalized extended Wasserstein training and optional factual calibration terms.
-- `estimators/neural.py`: shared neural-network modules and utilities used by GANICE.
-- `estimators/metrics.py`: Wasserstein, CRPS, energy distance, MMD, CDF, quantile, tail, calibration, and PIT metric utilities.
-- `estimators/ihdp.py`: IHDP-Dist data loader and semi-synthetic stochastic potential-outcome law.
-- `estimators/jobs.py`: Jobs/LaLonde NSW/PSID loader, splitting logic, earnings transform, and helper utilities.
-- `estimators/tcga.py`: TCGA-Dose loader, TCGA preprocessing, database download/extraction helpers, and stochastic treatment/dosage response law.
-- `estimators/ganite.py`: GANITE baseline for binary-treatment benchmarks.
-- `estimators/po_flow.py`: PO-Flow baseline with scalar continuous normalizing flows.
-- `estimators/diff_po.py`: Diff-PO baseline with conditional diffusion and propensity weighting.
-- `estimators/infs.py`: INFs baseline with nuisance and target normalizing flows.
-- `estimators/dr_learner.py`: DR-Learner baseline for binary-treatment causal mean estimation.
-- `estimators/scigan.py`: SCIGAN baseline for multiple treatments with continuous dosages.
-- `estimators/vcnet.py`: VCNet baseline for continuous dosages.
-- `estimators/drnet.py`: DRNet baseline for multiple treatments with continuous dosages.
-- `estimators/utils.py`: small array and filesystem helpers.
-- `estimators/__init__.py`: package exports for the experiment modules.
+The additional-baseline runner fits CoDiTE, DNet, Causal-DRF, and SKCD on IHDP and Jobs.
+TCGA uses SCIGAN, VCNet, DRNet, and GANICE.
+CoDiTE and SKCD sampling adapters are described in the paper;
+the displayed SKCD label is `SKCD (adapted)`.
+The additional runner reads the existing benchmark CSVs and preserves the original methods' summary statistics.
+
+The main runner also accepts `--seed`, `--jobs-observed-controls {psid,psid_nsw}`, `--tcga-data-dir`, `--tcga-download`, and `--tcga-force-download`.
+The default Jobs observational sample uses NSW treated units and PSID controls.
+Data downloads and extracted data caches stay under `Data/`.
+
+### Source layout
+
+- `scripts/run_paper_experiments.py`: runs the paper experiments and assembles the main results table.
+- `scripts/run_ganice_experiment.py`: original benchmark methods and paper figures/tables.
+- `scripts/run_additional_baselines.py`: added binary-treatment baselines and merged results.
+- `scripts/run_implementation_transfer_diagnostics.py`: paired shared/routed implementation comparison.
+- `scripts/run_stress_tests.py`: finite-state GANICE sensitivity analysis for the six reported factors.
+- `estimators/ganice.py` and `estimators/neural.py`: GANICE and neural-network components.
+- `estimators/ihdp.py`, `estimators/jobs.py`, and `estimators/tcga.py`: benchmark data and outcome laws.
+- `estimators/mechanism_stress.py`: the bounded finite-state sensitivity outcome law.
+- Other modules under `estimators/`: baseline methods, metric utilities, and shared helpers.
+
+### Code checks
+
+```bash
+poetry install --with dev
+poetry run flake8 .
+poetry run ruff check .
+poetry run mypy .
+```
+
+The development dependencies include the SciPy type stubs used by mypy.
 
 ## Citation
 ```bibtex

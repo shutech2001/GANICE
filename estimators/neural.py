@@ -64,6 +64,8 @@ class BoundedMLP(nn.Module):
 
 
 class AnchoredOutcomeCritic(nn.Module):
+    anchor: torch.Tensor
+
     def __init__(
         self,
         y_dim: int,
